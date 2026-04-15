@@ -17,6 +17,7 @@ COLORS = {
     "magenta": "\033[95m",
     "cyan": "\033[96m",
     "white": "\033[97m",
+    "gray": "\033[90m",
     "reset": "\033[0m"
 }
 
@@ -28,6 +29,7 @@ class Client:
         self.port = port
         self.socket = None
         self.username = None
+        self.room = None
         self.color = None
         self.running = True
 
@@ -62,8 +64,15 @@ class Client:
             self.socket.sendall(room.encode('utf-8') + b'\n')
             response = self.socket.recv(1024).decode('utf-8')
             if "OK" in response:
+                self.room = room
                 return True
         return False
+
+    def show_help(self):
+        print(f"\n{COLORS['yellow']}=== Available Commands ==={COLORS['reset']}")
+        print(f"  {COLORS['cyan']}/room <name>{COLORS['reset']}  - Switch to another room")
+        print(f"  {COLORS['cyan']}/quit{COLORS['reset']}         - Leave the chat")
+        print(f"{COLORS['yellow']}========================{COLORS['reset']}\n")
 
     def format_message(self, data):
         try:
@@ -72,7 +81,8 @@ class Client:
                 return f"{COLORS['yellow']}[{msg['timestamp']}] {msg['message']}{COLORS['reset']}"
             else:
                 color = COLORS[msg.get("color", "white")]
-                return f"{color}[{msg['timestamp']}] {msg['username']}: {msg['message']}{COLORS['reset']}"
+                room_display = f"{COLORS['gray']}({msg['room']}){COLORS['reset']}"
+                return f"{color}[{msg['timestamp']}] {msg['username']}{room_display}: {msg['message']}{COLORS['reset']}"
         except:
             return data
 
@@ -86,7 +96,13 @@ class Client:
                 for line in data.split('\n'):
                     if line.strip():
                         if line.startswith("OK:"):
+                            if "Switched to" in line:
+                                new_room = line.split("Switched to ")[-1]
+                                self.room = new_room
+                                print(f"{COLORS['yellow']}Now in room: {new_room}{COLORS['reset']}")
                             continue
+                        elif line.startswith("ERROR:"):
+                            print(f"{COLORS['red']}{line[6:]}{COLORS['reset']}")
                         else:
                             print(self.format_message(line))
             except Exception as e:
@@ -97,11 +113,16 @@ class Client:
     def send_messages(self):
         try:
             while self.running:
-                message = input(f"{COLORS[self.color]}{self.username}{COLORS['reset']}: ")
+                message = input(f"{COLORS[self.color]}{self.username}{COLORS['gray']}({self.room}){COLORS['reset']}: ")
                 if message.lower() == "/quit":
                     self.running = False
                     break
-                if message.strip():
+                if message.startswith("/"):
+                    if message.lower() == "/quit":
+                        self.running = False
+                        break
+                    self.socket.sendall(message.encode('utf-8') + b'\n')
+                elif message.strip():
                     self.socket.sendall(message.encode('utf-8') + b'\n')
         except Exception as e:
             print(f"Send error: {e}")
@@ -121,8 +142,8 @@ class Client:
                 print("Failed to join room")
                 return
 
-            print(f"Logged in as {COLORS[self.color]}{self.username}{COLORS['reset']}")
-            print("Type /quit to exit\n")
+            print(f"\n{COLORS['green']}✓ Logged in as {COLORS[self.color]}{self.username}{COLORS['reset']}")
+            self.show_help()
 
             # Start receive thread
             receive_thread = threading.Thread(target=self.receive_messages)

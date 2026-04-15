@@ -63,15 +63,10 @@ class Client:
 
     def receive(self):
         try:
-            data = b''
-            while True:
-                chunk = self.conn.recv(1024)
-                if not chunk:
-                    return None
-                data += chunk
-                if b'\n' in data:
-                    line, remainder = data.split(b'\n', 1)
-                    return line.decode('utf-8'), remainder
+            data = self.conn.recv(1024)
+            if not data:
+                return None
+            return data.decode('utf-8').strip()
         except:
             return None
 
@@ -141,7 +136,7 @@ class Server:
         try:
             # Request username
             client.send("USERNAME:")
-            message = self.receive_message(client)
+            message = client.receive()
             if not message:
                 return
             
@@ -158,7 +153,7 @@ class Server:
 
             # Request room
             client.send("ROOM:")
-            message = self.receive_message(client)
+            message = client.receive()
             if not message:
                 return
 
@@ -173,32 +168,63 @@ class Server:
             timestamp = datetime.now().strftime("%H:%M:%S")
             notification = json.dumps({
                 "type": "system",
-                "username": "SERVER",
                 "message": f"{username} joined the room",
-                "timestamp": timestamp,
-                "room": room_name
+                "timestamp": timestamp
             })
             room.broadcast(notification, sender=client)
             client.send("OK:Connected to " + room_name)
 
             # Handle messages
             while True:
-                message = self.receive_message(client)
+                message = client.receive()
                 if not message:
                     break
 
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                msg_data = json.dumps({
-                    "type": "message",
-                    "username": username,
-                    "message": message.strip(),
-                    "timestamp": timestamp,
-                    "room": room_name
-                })
+                # Check for room change command
+                if message.startswith("/room "):
+                    new_room_name = message[6:].strip()
+                    if not new_room_name:
+                        client.send("ERROR:Room name cannot be empty")
+                        continue
+                    
+                    # Leave current room
+                    old_room = client.room
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    notification = json.dumps({
+                        "type": "system",
+                        "message": f"{username} left the room",
+                        "timestamp": timestamp
+                    })
+                    old_room.broadcast(notification)
+                    old_room.remove_client(client)
+                    
+                    # Join new room
+                    new_room = self.get_or_create_room(new_room_name)
+                    client.room = new_room
+                    new_room.add_client(client)
+                    
+                    logger.info(f"User {username} switched to room {new_room_name}")
+                    
+                    notification = json.dumps({
+                        "type": "system",
+                        "message": f"{username} joined the room",
+                        "timestamp": timestamp
+                    })
+                    new_room.broadcast(notification, sender=client)
+                    client.send(f"OK:Switched to {new_room_name}")
+                else:
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    msg_data = json.dumps({
+                        "type": "message",
+                        "username": username,
+                        "room": client.room.name,
+                        "message": message.strip(),
+                        "timestamp": timestamp
+                    })
 
-                logger.info(f"[{room_name}] {username}: {message.strip()}")
-                room.broadcast(msg_data, sender=client)
-                client.send("OK:")
+                    logger.info(f"[{client.room.name}] {username}: {message.strip()}")
+                    client.room.broadcast(msg_data, sender=client)
+                    client.send("OK:")
 
         except Exception as e:
             logger.error(f"Error handling client {client.addr}: {e}")
@@ -209,10 +235,8 @@ class Server:
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     notification = json.dumps({
                         "type": "system",
-                        "username": "SERVER",
                         "message": f"{client.username} left the room",
-                        "timestamp": timestamp,
-                        "room": client.room.name
+                        "timestamp": timestamp
                     })
                     client.room.broadcast(notification)
                     logger.info(f"User {client.username} disconnected")
@@ -225,13 +249,6 @@ class Server:
                 client.conn.close()
             except:
                 pass
-
-    def receive_message(self, client):
-        try:
-            data = client.conn.recv(1024).decode('utf-8')
-            return data.strip() if data else None
-        except:
-            return None
 
 if __name__ == "__main__":
     server = Server(HOST, PORT)
