@@ -1,6 +1,6 @@
 """
 Crypto Vibeness - Secure Chat Server
-Stage 1: Base chat
+Stage 1: Base chat with authentication
 """
 
 import socket
@@ -9,6 +9,8 @@ import json
 import logging
 import signal
 import os
+import hashlib
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +37,80 @@ logger.info(f"=" * 50)
 
 HOST = '127.0.0.1'
 PORT = 5001
+
+class AuthManager:
+    """Manages user authentication and account persistence"""
+    
+    def __init__(self, accounts_file='accounts.json'):
+        self.accounts_file = accounts_file
+        self.accounts = {}
+        self.lock = threading.Lock()
+        self.load_accounts()
+    
+    def load_accounts(self):
+        """Load accounts from JSON file"""
+        try:
+            if os.path.exists(self.accounts_file):
+                with open(self.accounts_file, 'r') as f:
+                    self.accounts = json.load(f)
+                logger.info(f"Loaded {len(self.accounts)} accounts")
+            else:
+                logger.info("No accounts file found, starting fresh")
+        except Exception as e:
+            logger.error(f"Error loading accounts: {e}")
+            self.accounts = {}
+    
+    def save_accounts(self):
+        """Save accounts to JSON file"""
+        try:
+            with open(self.accounts_file, 'w') as f:
+                json.dump(self.accounts, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving accounts: {e}")
+    
+    def hash_password(self, password):
+        """Hash password with salt using SHA256"""
+        salt = secrets.token_hex(16)
+        hash_obj = hashlib.sha256((salt + password).encode())
+        hashed = hash_obj.hexdigest()
+        return f"{salt}${hashed}"
+    
+    def verify_password(self, password, stored_hash):
+        """Verify password against stored hash"""
+        try:
+            salt, hashed = stored_hash.split('$')
+            hash_obj = hashlib.sha256((salt + password).encode())
+            return hash_obj.hexdigest() == hashed
+        except:
+            return False
+    
+    def account_exists(self, username):
+        """Check if account exists"""
+        with self.lock:
+            return username in self.accounts
+    
+    def create_account(self, username, password):
+        """Create new account"""
+        with self.lock:
+            if username in self.accounts:
+                return False  # Account already exists
+            
+            self.accounts[username] = {
+                "password_hash": self.hash_password(password),
+                "created_at": datetime.now().isoformat()
+            }
+            self.save_accounts()
+            logger.info(f"Account created: {username}")
+            return True
+    
+    def verify_account(self, username, password):
+        """Verify username and password"""
+        with self.lock:
+            if username not in self.accounts:
+                return False
+            
+            stored_hash = self.accounts[username]["password_hash"]
+            return self.verify_password(password, stored_hash)
 
 class Room:
     def __init__(self, name, is_private=False, password=None):
@@ -67,6 +143,7 @@ class Client:
         self.conn = conn
         self.addr = addr
         self.username = None
+        self.authenticated = False
         self.room = None
 
     def send(self, message):
@@ -88,6 +165,7 @@ class Server:
     def __init__(self, host, port):
         self.host = host
         self.port = port
+        self.auth_manager = AuthManager()  # Add authentication
         self.rooms = {}
         self.clients = {}
         self.usernames = set()
@@ -149,35 +227,97 @@ class Server:
                 logger.info(f"Room '{room_name}' created ({privacy_str})")
             return self.rooms[room_name]
 
-    def handle_client(self, client):
-        try:
-            # Request username with validation
-            while True:
-                client.send("USERNAME:")
-                message = client.receive()
-                if not message:
-                    return
+    def authenticate_client(self, client):
+        """Authenticate client: login existing account or create new account"""
+        logger.info(f"Authentication started for {client.addr}")
+        
+        while True:
+            # Request username
+            client.send("AUTH:")
+            username = client.receive()
+            if not username:
+                return None
+            
+            username = username.strip()
+            if not username or len(username) < 1:
+                client.send("ERROR:Invalid username")
+                continue
+            
+            # Check if account exists
+            if self.auth_manager.account_exists(username):
+                # Existing account - ask for password
+                logger.info(f"Login attempt: {username}")
+                client.send("PASSWORD:")
+                password = client.receive()
+                if not password:
+                    return None
                 
-                username = message.strip()
-                if not username:
-                    client.send("ERROR:Invalid username")
+                # Verify password (with retry loop)
+                while True:
+                    if self.auth_manager.verify_account(username, password):
+                        logger.info(f"User authenticated: {username}")
+                        client.send("OK:Authenticated")
+                        return username
+                    else:
+                        logger.warning(f"Failed password for {username}")
+                        client.send("ERROR:Invalid password\nPASSWORD:")
+                        password = client.receive()
+                        if not password:
+                            return None
+            else:
+                # New account - ask for creation
+                logger.info(f"New account signup: {username}")
+                client.send("CREATE_ACCOUNT?")
+                response = client.receive()
+                if not response or response.strip().lower() != "yes":
+                    continue
+                
+                # Get password
+                client.send("PASSWORD:")
+                password = client.receive()
+                if not password:
+                    return None
+                password = password.strip()
+                
+                # Confirm password
+                client.send("CONFIRM_PASSWORD:")
+                confirm = client.receive()
+                if not confirm:
+                    return None
+                confirm = confirm.strip()
+                
+                # Check if passwords match
+                if password != confirm:
+                    client.send("ERROR:Passwords don't match")
+                    continue
+                
+                # Create account
+                if self.auth_manager.create_account(username, password):
+                    logger.info(f"Account created: {username}")
+                    client.send("OK:Account created\nOK:Authenticated")
+                    return username
+                else:
+                    client.send("ERROR:Account already exists")
                     continue
 
-                with self.lock:
-                    if username in self.usernames:
-                        client.send("ERROR:Username already taken, please choose another")
-                        continue
-                    self.usernames.add(username)
-
-                client.username = username
-                with self.lock:
-                    self.clients[client.addr] = client
-
-                logger.info(f"User {username} connected")
-                client.send("OK:Username accepted")
-                break
-
-            # Request room with private room handling
+    def handle_client(self, client):
+        try:
+            # Phase 1: Authentication
+            username = self.authenticate_client(client)
+            if not username:
+                logger.warning(f"Authentication failed for {client.addr}")
+                return
+            
+            client.username = username
+            client.authenticated = True
+            
+            with self.lock:
+                self.usernames.add(username)
+                self.clients[client.addr] = client
+            
+            logger.info(f"User {username} connected and authenticated")
+            
+            # Phase 2: Room selection (existing flow)
             while True:
                 client.send("ROOM:")
                 message = client.receive()

@@ -47,47 +47,77 @@ class Client:
             return False
         return True
 
-    def get_username(self):
+    def authenticate(self):
+        """Authenticate: login or create account"""
         prompt = self.socket.recv(1024).decode('utf-8')
         
         while True:
-            # Check for error messages first (might be bundled with USERNAME)
+            # Check for error messages
             if "ERROR" in prompt:
                 error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0] if 'ERROR:' in prompt else prompt
                 print(f"❌ {error_msg}")
             
-            # Check if USERNAME prompt is present
-            if "USERNAME" in prompt:
+            # AUTH prompt - request username
+            if "AUTH" in prompt:
                 username = input("Enter username: ").strip()
                 if not username:
                     continue
                 self.username = username
                 self.socket.sendall(username.encode('utf-8') + b'\n')
+                prompt = self.socket.recv(1024).decode('utf-8')
+            
+            # CREATE_ACCOUNT? prompt - new account
+            elif "CREATE_ACCOUNT?" in prompt:
+                response = input("Create account? (yes/no): ").strip().lower()
+                self.socket.sendall(response.encode('utf-8') + b'\n')
                 
-                # Wait for response
-                response = self.socket.recv(1024).decode('utf-8')
-                if "ERROR" in response:
-                    print(f"❌ {response.split(':', 1)[1] if ':' in response else response}")
-                    # If ERROR is alone (no USERNAME in same response), wait for USERNAME
-                    if "USERNAME" not in response:
-                        prompt = self.socket.recv(1024).decode('utf-8')
-                    else:
-                        prompt = response
-                    # Loop back to check for error/username in the new prompt
-                    continue
+                if response == "yes":
+                    prompt = self.socket.recv(1024).decode('utf-8')
+                else:
+                    prompt = self.socket.recv(1024).decode('utf-8')
+            
+            # PASSWORD prompt - verify/set password
+            elif "PASSWORD" in prompt:
+                if "CONFIRM" in prompt:
+                    # Confirm password prompt
+                    password = input("Confirm password: ").strip()
+                else:
+                    # Regular password prompt
+                    password = input("Enter password: ").strip()
                 
-                if "OK" in response:
-                    # Assign color based on username hash
-                    color_idx = hash(username) % len(COLOR_LIST)
-                    self.color = COLOR_LIST[color_idx]
-                    return True
+                self.socket.sendall(password.encode('utf-8') + b'\n')
+                prompt = self.socket.recv(1024).decode('utf-8')
+            
+            # OK:Authenticated - success
+            elif "OK" in prompt and "Authenticated" in prompt:
+                color_idx = hash(self.username) % len(COLOR_LIST)
+                self.color = COLOR_LIST[color_idx]
+                print(f"✅ Authenticated as {self.username}")
+                return True
+            
+            # Bundled message handling
+            elif "ERROR" in prompt and "PASSWORD" in prompt:
+                # ERROR + PASSWORD bundled
+                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0]
+                print(f"❌ {error_msg}")
+                # Extract PASSWORD part
+                if "\n" in prompt:
+                    password = input("Enter password: ").strip()
+                    self.socket.sendall(password.encode('utf-8') + b'\n')
+                    prompt = self.socket.recv(1024).decode('utf-8')
+            
             else:
-                # No USERNAME prompt in this response, wait for next
+                # Unknown prompt, wait for next
                 prompt = self.socket.recv(1024).decode('utf-8')
         
         return False
 
+    def get_username(self):
+        """This method is now obsolete - use authenticate() instead"""
+        return True
+
     def get_room(self):
+        """Get/Create room selection and handling"""
         while True:
             prompt = self.socket.recv(1024).decode('utf-8')
             if "ROOM" in prompt:
@@ -250,10 +280,12 @@ class Client:
             return
 
         try:
-            if not self.get_username():
-                print("Failed to get username")
+            # Phase 1: Authenticate
+            if not self.authenticate():
+                print("❌ Authentication failed")
                 return
 
+            # Phase 2: Select/Create room
             if not self.get_room():
                 print("Failed to join room")
                 return
