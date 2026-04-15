@@ -6,6 +6,7 @@ Stage 1: Base chat
 import socket
 import threading
 import json
+import queue
 import sys
 from datetime import datetime
 
@@ -30,8 +31,11 @@ class Client:
         self.socket = None
         self.username = None
         self.room = None
+        self.room_is_private = False  # Track if current room is private
         self.color = None
         self.running = True
+        self.room_response_queue = queue.Queue()  # For PRIVATE?, PASSWORD responses
+        self.handling_room = False  # Flag to indicate /room command in progress
 
     def connect(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -45,28 +49,90 @@ class Client:
 
     def get_username(self):
         prompt = self.socket.recv(1024).decode('utf-8')
-        if "USERNAME" in prompt:
-            username = input("Enter username: ").strip()
-            if not username:
-                return False
-            self.username = username
-            self.socket.sendall(username.encode('utf-8') + b'\n')
-            # Assign color based on username hash
-            color_idx = hash(username) % len(COLOR_LIST)
-            self.color = COLOR_LIST[color_idx]
-            return True
+        
+        while True:
+            # Check for error messages first (might be bundled with USERNAME)
+            if "ERROR" in prompt:
+                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0] if 'ERROR:' in prompt else prompt
+                print(f"❌ {error_msg}")
+            
+            # Check if USERNAME prompt is present
+            if "USERNAME" in prompt:
+                username = input("Enter username: ").strip()
+                if not username:
+                    continue
+                self.username = username
+                self.socket.sendall(username.encode('utf-8') + b'\n')
+                
+                # Wait for response
+                response = self.socket.recv(1024).decode('utf-8')
+                if "ERROR" in response:
+                    print(f"❌ {response.split(':', 1)[1] if ':' in response else response}")
+                    # If ERROR is alone (no USERNAME in same response), wait for USERNAME
+                    if "USERNAME" not in response:
+                        prompt = self.socket.recv(1024).decode('utf-8')
+                    else:
+                        prompt = response
+                    # Loop back to check for error/username in the new prompt
+                    continue
+                
+                if "OK" in response:
+                    # Assign color based on username hash
+                    color_idx = hash(username) % len(COLOR_LIST)
+                    self.color = COLOR_LIST[color_idx]
+                    return True
+            else:
+                # No USERNAME prompt in this response, wait for next
+                prompt = self.socket.recv(1024).decode('utf-8')
+        
         return False
 
     def get_room(self):
-        prompt = self.socket.recv(1024).decode('utf-8')
-        if "ROOM" in prompt:
-            room = input("Enter room name (default: general): ").strip() or "general"
-            self.socket.sendall(room.encode('utf-8') + b'\n')
-            response = self.socket.recv(1024).decode('utf-8')
-            if "OK" in response:
-                self.room = room
-                return True
-        return False
+        while True:
+            prompt = self.socket.recv(1024).decode('utf-8')
+            if "ROOM" in prompt:
+                room = input("Enter room name (default: general): ").strip() or "general"
+                self.socket.sendall(room.encode('utf-8') + b'\n')
+                
+                # Check if server asks about privacy (new room)
+                response = self.socket.recv(1024).decode('utf-8')
+                if "PRIVATE?" in response:
+                    is_private = input("Do you want this room to be private? (yes/no): ").strip().lower()
+                    self.socket.sendall(is_private.encode('utf-8') + b'\n')
+                    
+                    if is_private == "yes":
+                        prompt = self.socket.recv(1024).decode('utf-8')
+                        if "PASSWORD" in prompt:
+                            password = input("Enter room password: ").strip()
+                            self.socket.sendall(password.encode('utf-8') + b'\n')
+                            response = self.socket.recv(1024).decode('utf-8')
+                    else:
+                        response = self.socket.recv(1024).decode('utf-8')
+                
+                # Handle password prompts for existing private rooms (may retry)
+                while "PASSWORD" in response:
+                    password = input("Enter room password: ").strip()
+                    self.socket.sendall(password.encode('utf-8') + b'\n')
+                    response = self.socket.recv(1024).decode('utf-8')
+                    
+                    if "ERROR" in response:
+                        print(f"❌ {response.split(':', 1)[1] if ':' in response else response}")
+                        # If ERROR is alone (no PASSWORD in same response), wait for PASSWORD
+                        if "PASSWORD" not in response:
+                            response = self.socket.recv(1024).decode('utf-8')
+                
+                # Check final response
+                if "ERROR" in response:
+                    print(f"❌ {response.split(':', 1)[1] if ':' in response else response}")
+                    continue
+                elif "OK" in response:
+                    # Extract room name and privacy info
+                    parts = response.split("Connected to ")[-1].split("|")
+                    self.room = parts[0]
+                    if len(parts) > 1:
+                        self.room_is_private = "🔒" in parts[1]
+                    return True
+            return False
 
     def show_help(self):
         print(f"\n{COLORS['yellow']}=== Available Commands ==={COLORS['reset']}")
@@ -78,11 +144,10 @@ class Client:
         try:
             msg = json.loads(data)
             if msg["type"] == "system":
-                return f"{COLORS['yellow']}[{msg['timestamp']}] {msg['message']}{COLORS['reset']}"
+                return f"{COLORS['yellow']}{msg['message']}{COLORS['reset']}"
             else:
                 color = COLORS[msg.get("color", "white")]
-                room_display = f"{COLORS['gray']}({msg['room']}){COLORS['reset']}"
-                return f"{color}[{msg['timestamp']}] {msg['username']}{room_display}: {msg['message']}{COLORS['reset']}"
+                return f"{color}{msg['username']}: {msg['message']}{COLORS['reset']}"
         except:
             return data
 
@@ -95,33 +160,84 @@ class Client:
                 
                 for line in data.split('\n'):
                     if line.strip():
-                        if line.startswith("OK:"):
-                            if "Switched to" in line:
-                                new_room = line.split("Switched to ")[-1]
-                                self.room = new_room
-                                print(f"{COLORS['yellow']}Now in room: {new_room}{COLORS['reset']}")
+                        if line.startswith("PRIVATE?") or line.startswith("PASSWORD"):
+                            # If handling /room, put in queue; otherwise skip
+                            if self.handling_room:
+                                self.room_response_queue.put(line.strip())
+                            continue
+                        elif line.startswith("OK:") and "Switched to" in line:
+                            # Put in queue if handling room, else skip
+                            if self.handling_room:
+                                self.room_response_queue.put(line.strip())
                             continue
                         elif line.startswith("ERROR:"):
-                            print(f"{COLORS['red']}{line[6:]}{COLORS['reset']}")
+                            # Put in queue if handling room, else print
+                            if self.handling_room:
+                                self.room_response_queue.put(line.strip())
+                            else:
+                                print(f"{COLORS['red']}{line[6:]}{COLORS['reset']}")
                         else:
-                            print(self.format_message(line))
+                            formatted = self.format_message(line)
+                            print(formatted)
             except Exception as e:
                 if self.running:
                     print(f"Receive error: {e}")
                 break
 
+    def handle_room_command(self, room_name):
+        """Handle /room command - ask for password if needed"""
+        self.handling_room = True
+        try:
+            self.socket.sendall(f"/room {room_name}".encode('utf-8') + b'\n')
+            
+            # Read responses from queue (receive_messages thread puts them there)
+            while True:
+                try:
+                    response = self.room_response_queue.get(timeout=5.0)
+                except queue.Empty:
+                    print(f"{COLORS['red']}Timeout waiting for server response{COLORS['reset']}")
+                    break
+                
+                if response.startswith("OK:"):
+                    if "Switched to" in response:
+                        parts = response.split("Switched to ")[-1].split("|")
+                        new_room = parts[0]
+                        privacy_marker = parts[1] if len(parts) > 1 else ""
+                        self.room = new_room
+                        self.room_is_private = "🔒" in privacy_marker
+                        print(f"{COLORS['yellow']}Now in room: {new_room} {privacy_marker}{COLORS['reset']}")
+                    break
+                elif response.startswith("PRIVATE?"):
+                    # New room - ask about privacy
+                    is_private = input("Do you want this room to be private? (yes/no): ").strip().lower()
+                    self.socket.sendall(is_private.encode('utf-8') + b'\n')
+                elif response.startswith("PASSWORD"):
+                    # Room requires password
+                    password = input("Enter room password: ").strip()
+                    self.socket.sendall(password.encode('utf-8') + b'\n')
+                elif response.startswith("ERROR:"):
+                    print(f"{COLORS['red']}{response[6:]}{COLORS['reset']}")
+        finally:
+            self.handling_room = False
+    
     def send_messages(self):
         try:
             while self.running:
-                message = input(f"{COLORS[self.color]}{self.username}{COLORS['gray']}({self.room}){COLORS['reset']}: ")
+                privacy_marker = "🔒" if self.room_is_private else "🔓"
+                room_display = f"{COLORS['gray']}[{self.room} {privacy_marker}]{COLORS['reset']}" if self.room else ""
+                message = input(f"{COLORS[self.color]}{self.username}{COLORS['reset']} {room_display}: ")
                 if message.lower() == "/quit":
                     self.running = False
                     break
-                if message.startswith("/"):
-                    if message.lower() == "/quit":
-                        self.running = False
-                        break
-                    self.socket.sendall(message.encode('utf-8') + b'\n')
+                if message.startswith("/room "):
+                    room_name = message[6:].strip()
+                    if room_name:
+                        self.handle_room_command(room_name)
+                    else:
+                        print(f"{COLORS['red']}Room name cannot be empty{COLORS['reset']}")
+                elif message.lower() == "/quit":
+                    self.running = False
+                    break
                 elif message.strip():
                     self.socket.sendall(message.encode('utf-8') + b'\n')
         except Exception as e:
@@ -165,5 +281,5 @@ class Client:
                 pass
 
 if __name__ == "__main__":
-    client = Client("127.0.0.1", 5000)
+    client = Client("127.0.0.1", 5001)
     client.run()

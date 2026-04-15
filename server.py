@@ -8,25 +8,39 @@ import threading
 import json
 import logging
 import signal
+import os
 from datetime import datetime
 from pathlib import Path
+
+# Create logs directory if it doesn't exist
+logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(logs_dir, exist_ok=True)
+
+# Create timestamped log file
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_file = os.path.join(logs_dir, f'log_{timestamp}.txt')
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('server.log'),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+logger.info(f"=" * 50)
+logger.info(f"Server started - Log file: {log_file}")
+logger.info(f"=" * 50)
 
 HOST = '127.0.0.1'
-PORT = 5000
+PORT = 5001
 
 class Room:
-    def __init__(self, name):
+    def __init__(self, name, is_private=False, password=None):
         self.name = name
+        self.is_private = is_private
+        self.password = password
         self.clients = []
         self.lock = threading.Lock()
 
@@ -76,6 +90,7 @@ class Server:
         self.port = port
         self.rooms = {}
         self.clients = {}
+        self.usernames = set()
         self.lock = threading.Lock()
         self.socket = None
         self.running = True
@@ -126,53 +141,106 @@ class Server:
                 except:
                     pass
 
-    def get_or_create_room(self, room_name):
+    def get_or_create_room(self, room_name, is_private=False, password=None):
         with self.lock:
             if room_name not in self.rooms:
-                self.rooms[room_name] = Room(room_name)
+                self.rooms[room_name] = Room(room_name, is_private, password)
+                privacy_str = "PRIVATE" if is_private else "PUBLIC"
+                logger.info(f"Room '{room_name}' created ({privacy_str})")
             return self.rooms[room_name]
 
     def handle_client(self, client):
         try:
-            # Request username
-            client.send("USERNAME:")
-            message = client.receive()
-            if not message:
-                return
-            
-            username = message.strip()
-            if not username:
-                client.send("ERROR:Invalid username")
-                return
+            # Request username with validation
+            while True:
+                client.send("USERNAME:")
+                message = client.receive()
+                if not message:
+                    return
+                
+                username = message.strip()
+                if not username:
+                    client.send("ERROR:Invalid username")
+                    continue
 
-            client.username = username
-            with self.lock:
-                self.clients[client.addr] = client
+                with self.lock:
+                    if username in self.usernames:
+                        client.send("ERROR:Username already taken, please choose another")
+                        continue
+                    self.usernames.add(username)
 
-            logger.info(f"User {username} connected")
+                client.username = username
+                with self.lock:
+                    self.clients[client.addr] = client
 
-            # Request room
-            client.send("ROOM:")
-            message = client.receive()
-            if not message:
-                return
+                logger.info(f"User {username} connected")
+                client.send("OK:Username accepted")
+                break
 
-            room_name = message.strip() or "general"
-            room = self.get_or_create_room(room_name)
-            client.room = room
-            room.add_client(client)
+            # Request room with private room handling
+            while True:
+                client.send("ROOM:")
+                message = client.receive()
+                if not message:
+                    return
 
-            logger.info(f"User {username} joined room {room_name}")
-            
-            # Notify room
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            notification = json.dumps({
-                "type": "system",
-                "message": f"{username} joined the room",
-                "timestamp": timestamp
-            })
-            room.broadcast(notification, sender=client)
-            client.send("OK:Connected to " + room_name)
+                room_name = message.strip() or "general"
+                
+                with self.lock:
+                    room_exists = room_name in self.rooms
+                
+                # "general" room is always public
+                if room_name == "general" and not room_exists:
+                    room = self.get_or_create_room(room_name, is_private=False)
+                elif not room_exists:
+                    # New room - ask if private
+                    client.send("PRIVATE?:yes/no")
+                    privacy_response = client.receive()
+                    if not privacy_response:
+                        return
+                    
+                    is_private = privacy_response.strip().lower() == "yes"
+                    password = None
+                    
+                    if is_private:
+                        client.send("PASSWORD:")
+                        password = client.receive()
+                        if not password:
+                            return
+                        password = password.strip()
+                    
+                    room = self.get_or_create_room(room_name, is_private, password)
+                else:
+                    # Existing room
+                    room = self.rooms[room_name]
+                    if room.is_private:
+                        while True:
+                            client.send("PASSWORD:")
+                            provided_password = client.receive()
+                            if not provided_password:
+                                return
+                            
+                            if provided_password.strip() == room.password:
+                                break
+                            else:
+                                client.send("ERROR:Incorrect password")
+                
+                client.room = room
+                room.add_client(client)
+
+                logger.info(f"User {username} joined room {room_name}")
+                
+                # Notify room
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                notification = json.dumps({
+                    "type": "system",
+                    "message": f"{username} joined the room",
+                    "timestamp": timestamp
+                })
+                room.broadcast(notification, sender=client)
+                privacy_marker = "🔒" if room.is_private else "🔓"
+                client.send(f"OK:Connected to {room_name}|{privacy_marker}")
+                break
 
             # Handle messages
             while True:
@@ -187,6 +255,9 @@ class Server:
                         client.send("ERROR:Room name cannot be empty")
                         continue
                     
+                    with self.lock:
+                        room_exists = new_room_name in self.rooms
+                    
                     # Leave current room
                     old_room = client.room
                     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -198,8 +269,43 @@ class Server:
                     old_room.broadcast(notification)
                     old_room.remove_client(client)
                     
+                    # "general" room is always public
+                    if new_room_name == "general" and not room_exists:
+                        new_room = self.get_or_create_room(new_room_name, is_private=False)
+                    elif not room_exists:
+                        # New room - ask if private
+                        client.send("PRIVATE?:yes/no")
+                        privacy_response = client.receive()
+                        if not privacy_response:
+                            return
+                        
+                        is_private = privacy_response.strip().lower() == "yes"
+                        password = None
+                        
+                        if is_private:
+                            client.send("PASSWORD:")
+                            password = client.receive()
+                            if not password:
+                                return
+                            password = password.strip()
+                        
+                        new_room = self.get_or_create_room(new_room_name, is_private, password)
+                    else:
+                        # Existing room
+                        new_room = self.rooms[new_room_name]
+                        if new_room.is_private:
+                            while True:
+                                client.send("PASSWORD:")
+                                provided_password = client.receive()
+                                if not provided_password:
+                                    return
+                                
+                                if provided_password.strip() == new_room.password:
+                                    break
+                                else:
+                                    client.send("ERROR:Incorrect password\nPASSWORD:")
+                    
                     # Join new room
-                    new_room = self.get_or_create_room(new_room_name)
                     client.room = new_room
                     new_room.add_client(client)
                     
@@ -211,18 +317,21 @@ class Server:
                         "timestamp": timestamp
                     })
                     new_room.broadcast(notification, sender=client)
-                    client.send(f"OK:Switched to {new_room_name}")
+                    privacy_marker = "🔒" if new_room.is_private else "🔓"
+                    client.send(f"OK:Switched to {new_room_name}|{privacy_marker}")
                 else:
                     timestamp = datetime.now().strftime("%H:%M:%S")
+                    # Sanitize message: remove newlines to prevent protocol corruption
+                    sanitized_message = message.strip().replace('\n', ' ').replace('\r', '')
                     msg_data = json.dumps({
                         "type": "message",
                         "username": username,
                         "room": client.room.name,
-                        "message": message.strip(),
+                        "message": sanitized_message,
                         "timestamp": timestamp
                     })
 
-                    logger.info(f"[{client.room.name}] {username}: {message.strip()}")
+                    logger.info(f"[{client.room.name}] {username}: {sanitized_message}")
                     client.room.broadcast(msg_data, sender=client)
                     client.send("OK:")
 
@@ -244,6 +353,8 @@ class Server:
             with self.lock:
                 if client.addr in self.clients:
                     del self.clients[client.addr]
+                if client.username:
+                    self.usernames.discard(client.username)
             
             try:
                 client.conn.close()
