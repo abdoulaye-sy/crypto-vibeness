@@ -1,0 +1,309 @@
+═══════════════════════════════════════════════════════════════════════════════
+SOCIAL PRESENCE SYSTEM - REAL-TIME LIVE USER AWARENESS
+═══════════════════════════════════════════════════════════════════════════════
+
+OVERVIEW
+────────────────────────────────────────────────────────────────────────────
+A complete Discord-like presence system that makes the chat dynamic with:
+- Real-time user tracking per room
+- Join/leave notifications to notify users of activity
+- User listing to see who's in each room
+- Thread-safe operations to prevent race conditions
+
+═══════════════════════════════════════════════════════════════════════════════
+
+1. JOIN NOTIFICATIONS
+────────────────────────────────────────────────────────────────────────────
+
+When a user joins a room with /join:
+
+1a) Notify the OLD room that user is leaving:
+    [SERVER] <user> left <old_room>
+    → Sent to: All users in old room
+
+1b) Confirm to the USER they joined:
+    [SERVER] You joined room: <new_room>
+    → Sent to: The joining user only
+
+1c) Notify the NEW room that user joined:
+    [SERVER] <user> joined <new_room>
+    → Sent to: All users in new room (except the joining user)
+
+EXAMPLE:
+  User "alice" joins "crypto" from "general":
+  [general room sees]: [SERVER] alice left general
+  [alice sees]:        [SERVER] You joined room: crypto
+  [crypto room sees]:  [SERVER] alice joined crypto
+
+═══════════════════════════════════════════════════════════════════════════════
+
+2. LEAVE NOTIFICATIONS
+────────────────────────────────────────────────────────────────────────────
+
+When a user uses /leave (returns to general):
+
+1a) Notify the OLD room:
+    [SERVER] <user> left <old_room>
+    → Sent to: All users in old room
+
+1b) Confirm to the USER:
+    [SERVER] You returned to <default_room>
+    → Sent to: The leaving user only
+
+1c) Notify the NEW room (general):
+    [SERVER] <user> joined <default_room>
+    → Sent to: All users in general room
+
+═══════════════════════════════════════════════════════════════════════════════
+
+3. DISCONNECT NOTIFICATIONS
+────────────────────────────────────────────────────────────────────────────
+
+When a user disconnects from the network:
+
+1) Automatically removed from current room
+2) Message sent to room:
+   [SERVER] <user> left <room>
+   → Sent to: All remaining users in that room
+
+This happens even if user doesn't explicitly /leave.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+4. /users COMMAND - NEW
+────────────────────────────────────────────────────────────────────────────
+
+Usage: /users
+
+Shows all users currently in the same room.
+
+RESPONSES:
+
+  If users exist:
+  [SERVER] Users in <room>: user1, user2, user3
+
+  If room is empty:
+  [SERVER] No users in <room>
+
+FEATURES:
+  ✓ Returns sorted list (alphabetical)
+  ✓ Thread-safe (uses locks)
+  ✓ Excludes users from other rooms
+  ✓ Includes the current user
+
+═══════════════════════════════════════════════════════════════════════════════
+
+5. PRESENCE TRACKING ARCHITECTURE
+────────────────────────────────────────────────────────────────────────────
+
+Data Structures:
+
+  rooms = {
+    'general': [socket1, socket2, ...],
+    'crypto': [socket3, socket4, ...],
+    ...
+  }
+
+  clients = {
+    socket1: {'username': 'alice', 'room': 'general', 'address': (ip, port)},
+    socket2: {'username': 'bob', 'room': 'crypto', 'address': (ip, port)},
+    ...
+  }
+
+Key Functions:
+
+1. join_room(socket, room, username)
+   → Adds socket to rooms[room] list
+   → Updates clients dict
+   → Creates room if doesn't exist
+
+2. leave_room(socket, room)
+   → Removes socket from rooms[room]
+   → Deletes empty rooms (except general)
+
+3. get_users_in_room(room)
+   → Returns sorted list of usernames in room
+   → Thread-safe (dual locks: rooms_lock then clients_lock)
+
+4. broadcast_to_room(message, room, exclude_socket=None)
+   → Sends message to all users in room
+   → Optionally excludes sender to avoid echo
+   → Handles socket errors gracefully
+
+═══════════════════════════════════════════════════════════════════════════════
+
+6. THREAD SAFETY - CRITICAL
+────────────────────────────────────────────────────────────────────────────
+
+Three independent locks prevent race conditions:
+
+1. rooms_lock
+   Protects: rooms dictionary structure
+   Used when: Adding/removing sockets to rooms
+
+2. clients_lock
+   Protects: clients dictionary
+   Used when: Storing/retrieving client info (username, room, address)
+
+3. reset_tokens_lock
+   Protects: Password reset tokens
+   Used when: Generating/verifying tokens
+
+Lock Ordering (prevents deadlock):
+  Always acquire in this order: rooms_lock → clients_lock → reset_tokens_lock
+  Never acquire in reverse order
+
+Example Safe Sequence:
+  with rooms_lock:
+      room_clients = list(rooms.get(room, []))
+  with clients_lock:
+      for sock in room_clients:
+          if sock in clients:
+              username = clients[sock]['username']
+
+═══════════════════════════════════════════════════════════════════════════════
+
+7. MESSAGE FLOW - COMPLETE EXAMPLE
+────────────────────────────────────────────────────────────────────────────
+
+SCENARIO: alice (in general), bob (in crypto) both connected, alice joins crypto
+
+1. alice types: /join crypto
+
+2. Server processes /join command:
+   a) Store old_room = "general"
+   b) Remove alice from rooms['general']
+   c) Send to rooms['general']: "[SERVER] alice left general"
+   d) Add alice to rooms['crypto']
+   e) Send to alice: "[SERVER] You joined room: crypto"
+   f) Send to rooms['crypto']: "[SERVER] alice joined crypto"
+
+3. Now all three messages appear:
+   
+   [general]:        [SERVER] alice left general
+   [alice sees]:     [SERVER] You joined room: crypto
+   [crypto]:         [SERVER] alice joined crypto
+                     (bob sees this)
+
+4. Result: alice and bob both see each other joined, and general room sees alice leave
+
+═══════════════════════════════════════════════════════════════════════════════
+
+8. BROADCAST ISOLATION - NO CROSS-ROOM BLEEDING
+────────────────────────────────────────────────────────────────────────────
+
+RULE: Messages only go to current room
+
+Chat message flow:
+  if message.startswith('/'):
+      → Handle as command (no broadcast)
+  else:
+      → Broadcast only to current room (not global)
+
+Example:
+  alice in general:     "hello" → only general sees it
+  bob in crypto:        "hello" → only crypto sees it
+  alice /joins crypto:  "hello" → only crypto sees it
+
+Result: Perfect room isolation, like Discord channels
+
+═══════════════════════════════════════════════════════════════════════════════
+
+9. BUG FIX IN THIS UPDATE
+────────────────────────────────────────────────────────────────────────────
+
+ISSUE:
+  get_users_in_room() was using clients_lock to check rooms dictionary
+  This could cause deadlock if called while rooms_lock is held
+
+FIX:
+  Changed to use rooms_lock first:
+    with rooms_lock:
+        room_clients = list(rooms.get(room_name, []))
+    
+    with clients_lock:
+        for sock in room_clients:
+            if sock in clients:
+                users.append(clients[sock]['username'])
+
+BENEFIT:
+  ✓ Prevents deadlock
+  ✓ Proper lock ordering maintained
+  ✓ Atomic snapshot of room (no changes during iteration)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+10. SYSTEM BEHAVIOR - VISUAL EXAMPLE
+────────────────────────────────────────────────────────────────────────────
+
+Initial state: general room with 3 users
+
+  TERMINAL 1 (alice - general):
+  [SERVER] WELCOME TO CHAT SYSTEM
+  [SERVER] You joined room: general.
+  [SERVER] bob joined general
+  [SERVER] charlie joined general
+
+  TERMINAL 2 (bob - general):
+  [SERVER] WELCOME TO CHAT SYSTEM
+  [SERVER] You joined room: general.
+  [SERVER] charlie joined general
+
+  TERMINAL 3 (charlie - general):
+  [SERVER] WELCOME TO CHAT SYSTEM
+  [SERVER] You joined room: general.
+
+alice types: /users
+  alice sees: [SERVER] Users in general: alice, bob, charlie
+
+alice types: /join crypto
+  alice sees:     [SERVER] You joined room: crypto
+  bob sees:       [SERVER] alice left general
+  charlie sees:   [SERVER] alice left general
+
+alice types: hello
+  alice sees:     (nothing - sent to crypto room only)
+  bob sees:       (nothing - alice not in general anymore)
+  charlie sees:   (nothing - alice not in general anymore)
+
+(If bob also did /join crypto:)
+  bob sees:       [SERVER] You joined room: crypto
+  alice sees:     [SERVER] bob joined crypto
+  charlie sees:   [SERVER] bob left general
+
+Now alice and bob chat in crypto:
+  alice:   hello bob
+  bob:     hey alice
+  charlie sees nothing (he's in general)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+11. CODE CHECKLIST - ALL FEATURES IMPLEMENTED
+────────────────────────────────────────────────────────────────────────────
+
+✓ Join notifications sent to old and new room
+✓ Leave notifications sent to old and new room
+✓ Disconnect notifications sent to room
+✓ /users command lists room members
+✓ /rooms command shows all rooms with user counts
+✓ /join <room> changes room with notifications
+✓ /leave returns to general with notifications
+✓ Room isolation: messages only broadcast to current room
+✓ Thread-safe with proper locking
+✓ Message format: [SERVER] for system, [room] user: message for chat
+✓ No client modifications needed
+✓ Backward compatible with all auth systems
+
+═══════════════════════════════════════════════════════════════════════════════
+
+12. DISCORD-LIKE FEATURES ACHIEVED
+────────────────────────────────────────────────────────────────────────────
+
+✓ Channels/Rooms         → /join, /leave, /rooms
+✓ User presence          → /users, join/leave notifications
+✓ Room isolation         → Messages only in current room
+✓ Online awareness       → See who's in each room
+✓ Activity notifications → Know when users join/leave
+✓ Clean UI               → [SERVER] vs regular messages
+
+═══════════════════════════════════════════════════════════════════════════════

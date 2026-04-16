@@ -233,6 +233,52 @@ def broadcast_to_room(message, room_name, sender_socket=None):
                 pass
 
 
+
+def get_users_in_room(room_name):
+    """Get list of users in a specific room"""
+    users = []
+    with rooms_lock:
+        room_clients = list(rooms.get(room_name, []))
+    
+    with clients_lock:
+        for sock in room_clients:
+            if sock in clients:
+                users.append(clients[sock]['username'])
+    
+    return sorted(users)
+
+
+def format_rooms_list():
+    """Format rooms with user counts"""
+    room_list = get_all_rooms()
+    result = '[SERVER] ROOMS AVAILABLE:\n\n'
+    for room_name in sorted(room_list):
+        users = get_users_in_room(room_name)
+        user_count = len(users)
+        user_display = 'empty' if user_count == 0 else ', '.join(users)
+        result += f'- {room_name} ({user_count} users: {user_display})\n'
+    result += '\nInstructions:\n'
+    result += 'Use /join <room> to enter a room\n'
+    result += 'Example: /join crypto\n'
+    return result
+
+
+def get_welcome_message():
+    """Get the full welcome message"""
+    return ('[SERVER] WELCOME TO CHAT SYSTEM\n'
+            '\n'
+            'Rooms are available in this system.\n'
+            '\n'
+            'Available commands:\n'
+            '- /rooms   -> show all available rooms\n'
+            '- /join <room> -> join a room (example: /join crypto)\n'
+            '- /leave   -> return to general room\n'
+            '- /users   -> show users in current room\n'
+            '- /help    -> show this help message\n'
+            '\n'
+            'Current room: general\n')
+
+
 def handle_chat_command(client_socket, command, username, current_room):
     """Handle chat commands (/join, /leave, /rooms)"""
     parts = command.strip().split(maxsplit=1)
@@ -306,20 +352,23 @@ def handle_chat_command(client_socket, command, username, current_room):
             return None, current_room
     
     elif cmd == '/rooms':
-        room_list = get_all_rooms()
-        msg = f"[SERVER] Available rooms: {', '.join(sorted(room_list))}\n"
+        msg = format_rooms_list()
+        client_socket.send(msg.encode('utf-8'))
+        return None, current_room
+        return None, current_room
+    
+    elif cmd == '/users':
+        users = get_users_in_room(current_room)
+        if users:
+            user_list = ', '.join(users)
+            msg = f'[SERVER] Users in {current_room}: {user_list}\n'
+        else:
+            msg = f'[SERVER] No users in {current_room}\n'
         client_socket.send(msg.encode('utf-8'))
         return None, current_room
     
     elif cmd == '/help':
-        help_msg = (
-            "[SERVER] Available commands:\n"
-            "  /join <room>     - Join or create a room\n"
-            "  /leave           - Return to general room\n"
-            "  /rooms           - List all rooms\n"
-            "  /help            - Show this help\n"
-            "  quit             - Exit chat\n"
-        )
+        help_msg = get_welcome_message()
         client_socket.send(help_msg.encode('utf-8'))
         return None, current_room
     
@@ -481,7 +530,7 @@ def handle_client(client_socket, client_address):
                 broadcast_to_room(join_message, current_room, sender_socket=client_socket)
                 
                 # Show welcome message
-                welcome_msg = f"[SERVER] Welcome to {current_room}! Type /help for commands\n"
+                welcome_msg = get_welcome_message()
                 client_socket.send(welcome_msg.encode('utf-8'))
                 
                 # Main chat loop

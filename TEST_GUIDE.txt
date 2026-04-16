@@ -1,0 +1,56 @@
+SOCIAL PRESENCE SYSTEM - TEST GUIDE
+
+SETUP:
+1. Start new server: python3 server.py
+2. In 3 separate terminals, start clients: python3 client.py
+3. All choose LOGIN mode (or REGISTER if first time)
+
+TEST 1: /users COMMAND
+---------
+Terminal A (alice): /users
+Expected: [SERVER] Users in general: alice, bob
+
+TEST 2: /rooms COMMAND
+---------
+Terminal A: /rooms
+Expected: List showing:
+- general (2 users: alice, bob)
+
+TEST 3: /join and NOTIFICATIONS
+---------
+Terminal A: /join crypto
+Expected in A: [SERVER] You joined room: crypto
+Expected in B: [SERVER] alice left general
+
+TEST 4: ROOM ISOLATION
+---------
+Terminal A (alice in crypto): hello
+Terminal B (bob in general): Should see NOTHING
+
+Terminal B: /join crypto
+Terminal A: Sees [SERVER] bob joined crypto
+Terminal B: Sees [SERVER] You joined room: crypto
+
+Terminal A: hello from crypto
+Terminal B: Sees "alice: hello from crypto" (now in same room)
+
+TEST 5: /leave COMMAND
+---------
+Terminal B: /leave
+Expected in B: [SERVER] You returned to general
+Expected in A: [SERVER] bob left crypto
+
+TEST 6: DISCONNECT
+---------
+Terminal C (in general): Close connection
+Terminal A/B in general: See [SERVER] charlie left general
+
+KEY FEATURES TO VERIFY:
+✓ /users shows alphabetical user list
+✓ /rooms shows user counts
+✓ /join sends notification to both rooms
+✓ /leave sends notification to both rooms
+✓ Messages only in same room (isolation)
+✓ Welcome message on login
+✓ /help works
+✓ Disconnect cleanup
