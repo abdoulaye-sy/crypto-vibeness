@@ -9,17 +9,13 @@ import json
 import logging
 import signal
 import os
+import random
 from datetime import datetime
 from pathlib import Path
 from password_manager import PasswordManager, PasswordValidator, PasswordRulesEngine
 
 # Color mapping for usernames (must match client.py)
 COLOR_LIST = ["green", "yellow", "blue", "magenta", "cyan"]
-
-def get_username_color(username):
-    """Get color name for username (deterministic based on hash)"""
-    color_idx = hash(username) % len(COLOR_LIST)
-    return COLOR_LIST[color_idx]
 
 # Create logs directory if it doesn't exist
 logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
@@ -120,6 +116,7 @@ class Client:
         self.conn = conn
         self.addr = addr
         self.username = None
+        self.color = None
         self.authenticated = False
         self.room = None
 
@@ -146,9 +143,18 @@ class Server:
         self.rooms = {}
         self.clients = {}
         self.usernames = set()
+        self.user_colors = {}  # username -> color mapping
+        self.available_colors = set(COLOR_LIST)  # Track available colors
         self.lock = threading.Lock()
         self.socket = None
         self.running = True
+    
+    def get_random_color(self):
+        """Get a random available color"""
+        if not self.available_colors:
+            # If all colors taken, reuse from available
+            self.available_colors = set(COLOR_LIST)
+        return random.choice(list(self.available_colors))
 
     def signal_handler(self, sig, frame):
         logger.info("Shutdown signal received")
@@ -233,7 +239,12 @@ class Server:
                 while True:
                     if self.auth_manager.verify_account(username, password):
                         logger.info(f"User authenticated: {username}")
-                        client.send("OK:Authenticated")
+                        # Assign random color
+                        with self.lock:
+                            color = self.get_random_color()
+                            self.user_colors[username] = color
+                            self.available_colors.discard(color)
+                        client.send(f"OK:Authenticated|{color}")
                         return username
                     else:
                         logger.warning(f"Failed password for {username}")
@@ -288,7 +299,12 @@ class Server:
                 created, errors = self.auth_manager.create_account(username, password)
                 if created:
                     logger.info(f"Account created: {username}")
-                    client.send("OK:Account created\nOK:Authenticated")
+                    # Assign random color
+                    with self.lock:
+                        color = self.get_random_color()
+                        self.user_colors[username] = color
+                        self.available_colors.discard(color)
+                    client.send(f"OK:Account created\nOK:Authenticated|{color}")
                     return username
                 else:
                     client.send("ERROR:Failed to create account")
@@ -303,13 +319,16 @@ class Server:
                 return
             
             client.username = username
+            # Get color assigned during authentication
+            with self.lock:
+                client.color = self.user_colors.get(username, "white")
             client.authenticated = True
             
             with self.lock:
                 self.usernames.add(username)
                 self.clients[client.addr] = client
             
-            logger.info(f"User {username} connected and authenticated")
+            logger.info(f"User {username} connected and authenticated (color: {client.color})")
             
             # Phase 2: Room selection (existing flow)
             while True:
@@ -460,7 +479,7 @@ class Server:
                     msg_data = json.dumps({
                         "type": "message",
                         "username": username,
-                        "color": get_username_color(username),
+                        "color": client.color,
                         "room": client.room.name,
                         "message": sanitized_message,
                         "timestamp": timestamp
@@ -490,6 +509,10 @@ class Server:
                     del self.clients[client.addr]
                 if client.username:
                     self.usernames.discard(client.username)
+                    # Release the color back to available pool
+                    if client.username in self.user_colors:
+                        color = self.user_colors.pop(client.username)
+                        self.available_colors.add(color)
             
             try:
                 client.conn.close()

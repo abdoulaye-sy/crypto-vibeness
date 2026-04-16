@@ -113,8 +113,12 @@ class Client:
             
             # OK:Authenticated - success
             elif "OK:" in prompt and "Authenticated" in prompt:
-                color_idx = hash(self.username) % len(COLOR_LIST)
-                self.color = COLOR_LIST[color_idx]
+                # Extract color from server response (format: OK:Authenticated|color)
+                if "|" in prompt:
+                    _, color_part = prompt.split('|', 1)
+                    self.color = color_part.strip().split('\n')[0]
+                else:
+                    self.color = "white"  # Fallback
                 print(f"✅ Authenticated as {self.username}")
                 # Check for account creation message
                 if "Account created" in prompt:
