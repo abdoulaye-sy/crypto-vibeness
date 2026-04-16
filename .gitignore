@@ -1,47 +1,30 @@
-# Python
+# Credentials and secrets
+this_is_safe.txt
+
+# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+*.pyc
+*.pyo
 *.egg-info/
-.installed.cfg
-*.egg
+dist/
+build/
 
-# Virtual environments
-venv/
-ENV/
-env/
-
-# IDE
+# IDE and Editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
+
+# Environment
+venv/
+env/
+.env
+
+# Logs (except schema, keep directory)
+logs/*.txt
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Project-specific
-*.log
-*.db
-*.sqlite
-keys/
-credentials/
-logs/
-accounts.json
-this_is_safe.txt
