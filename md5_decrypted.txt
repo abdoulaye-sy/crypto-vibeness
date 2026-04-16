@@ -1,0 +1,55 @@
+==============================
+MD5 HASH CRACKING - HASHCAT
+==============================
+
+HASH: 35b95f7c0f63631c453220fb2a86f218
+PASSWORD FOUND: CMrsBB!
+
+==============================
+COMMANDE UTILISÉE
+==============================
+
+hashcat -m 0 -a 3 "35b95f7c0f63631c453220fb2a86f218" "?u?u?l?l?u?u?s"
+
+==============================
+EXPLICATION DÉTAILLÉE
+==============================
+
+1. hashcat : Outil de cracking de hash
+2. -m 0 : Mode 0 = MD5 (type de hash à casser)
+3. -a 3 : Attack mode 3 = Brute-Force (génère toutes les combinaisons possibles)
+4. "35b95f7c0f63631c453220fb2a86f218" : Le hash MD5 à casser
+5. "?u?u?l?l?u?u?s" : Masque de brute-force définissant la structure du mot de passe
+
+==============================
+DÉCODAGE DU MASQUE
+==============================
+
+?u?u?l?l?u?u?s = CMrsBB!
+
+Breakdown:
+- ?u : Uppercase letter (A-Z) → C
+- ?u : Uppercase letter (A-Z) → M
+- ?l : Lowercase letter (a-z) → r
+- ?l : Lowercase letter (a-z) → s
+- ?u : Uppercase letter (A-Z) → B
+- ?u : Uppercase letter (A-Z) → B
+- ?s : Special character → !
+
+==============================
+RÉSULTATS
+==============================
+
+Temps d'exécution: 19 secondes
+Vitesse: 30,467.7 kH/s (kiloHashes par seconde)
+Progression: 4.13% (421,158,912 combinaisons testées)
+Statut: Cracked ✓
+
+==============================
+NOTES PÉDAGOGIQUES
+==============================
+
+- MD5 est un hash cryptographique FAIBLE et NE DOIT PAS être utilisé pour les mots de passe
+- Les masques hashcat permettent de réduire l'espace de recherche (7 caractères au lieu de milliards)
+- Cette attaque démontre pourquoi les mots de passe doivent être forts et uniques
+- Préférer bcrypt, scrypt, ou Argon2 pour sécuriser les mots de passe en production

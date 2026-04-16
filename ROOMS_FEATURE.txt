@@ -1,0 +1,365 @@
+================================================================================
+                        CHAT ROOMS SYSTEM
+================================================================================
+
+OBJECTIVE:
+Add room system to organize conversations on the TCP chat
+
+================================================================================
+                       FEATURES IMPLEMENTED
+================================================================================
+
+1. ROOM MANAGEMENT:
+   - Global default room: "general"
+   - Each user starts in "general" room
+   - New rooms created on demand
+   - Rooms deleted when empty (except general)
+
+2. DATA STRUCTURES:
+
+   clients dict (ENHANCED):
+   {
+     client_socket: {
+       'address': (ip, port),
+       'username': 'john_doe',
+       'room': 'general'          ← NEW: current room
+     }
+   }
+
+   rooms dict (NEW):
+   {
+     'general': [client_socket1, client_socket2],
+     'crypto': [client_socket3],
+     'gaming': [client_socket4, client_socket5]
+   }
+
+3. COMMANDS (Chat only, not during auth):
+
+   /join <room>    → Join room (or create if doesn't exist)
+   /leave          → Return to general room
+   /rooms          → List all active rooms
+   /help           → Show available commands
+   quit            → Exit chat
+
+4. MESSAGE ISOLATION:
+   - Messages only broadcast to same room
+   - Room-specific notifications
+   - User count per room implicit (by number of clients)
+
+5. NOTIFICATIONS:
+   System messages when users join/leave:
+   "[SERVER] username joined room_name"
+   "[SERVER] username left room_name"
+
+================================================================================
+                        NEW FUNCTIONS (6)
+================================================================================
+
+1. get_all_rooms():
+   - Returns list of all active room names
+   - Thread-safe with rooms_lock
+
+2. join_room(client_socket, room_name, username):
+   - Adds client to room
+   - Creates room if doesn't exist
+   - Updates client info with current room
+
+3. leave_room(client_socket, room_name):
+   - Removes client from room
+   - Deletes empty rooms (except general)
+   - Thread-safe
+
+4. broadcast_to_room(message, room_name, sender_socket=None):
+   - Sends message to all clients in specific room
+   - Excludes sender (optional)
+   - Replaces old global broadcast() for chat
+
+5. handle_chat_command(client_socket, command, username, current_room):
+   - Processes /join, /leave, /rooms, /help
+   - Validates room names (alphanumeric, underscore, hyphen)
+   - Manages room transitions
+   - Returns (result, new_room)
+
+6. (Existing functions still present):
+   - handle_login_flow()
+   - handle_forgot_flow()
+   - handle_reset_flow()
+
+================================================================================
+                        MODIFIED STRUCTURES
+================================================================================
+
+GLOBAL STATE:
+
+Before:
+  clients = {}                    # Only clients dict
+  clients_lock = threading.Lock()
+
+After:
+  clients = {}                    # Now includes 'room' field
+  clients_lock = threading.Lock()
+  
+  rooms = {'general': []}         # NEW: room management
+  rooms_lock = threading.Lock()   # NEW: thread safety
+
+DEFAULT_ROOM = 'general'          # NEW: constant
+
+================================================================================
+                          FLOW CHANGES
+================================================================================
+
+LOGIN → CHAT:
+
+OLD:
+  1. Authenticate user
+  2. Add to clients dict
+  3. Broadcast global join message
+  4. Message loop → broadcast globally
+
+NEW:
+  1. Authenticate user
+  2. Set current_room = 'general'
+  3. Add to clients dict with room
+  4. Join default room
+  5. Broadcast to room join message
+  6. Message loop:
+     - Check for commands (/join, /leave, /rooms, /help)
+     - Broadcast to room only
+     - Update current_room on /join or /leave
+
+DISCONNECT:
+
+OLD:
+  1. Remove from clients dict
+  2. Broadcast global leave message
+
+NEW:
+  1. Leave current room
+  2. Remove from clients dict
+  3. Broadcast to room leave message
+
+================================================================================
+                      COMMAND EXAMPLES
+================================================================================
+
+USER JOINS ROOM:
+  User: /join crypto
+  Server: Removes from old room (if any)
+  Server: Adds to crypto room
+  Server (to user): "[SERVER] You joined room: crypto"
+  Server (to room): "[SERVER] john_doe joined crypto"
+  Log: "[ROOM] john_doe joined crypto"
+
+USER LISTS ROOMS:
+  User: /rooms
+  Server: "[SERVER] Available rooms: crypto, gaming, general"
+
+USER RETURNS TO GENERAL:
+  User: /leave
+  Server (to old room): "[SERVER] john_doe left trading"
+  Server (to user): "[SERVER] You returned to general"
+  Server (to general): "[SERVER] john_doe joined general"
+  Log: "[ROOM] john_doe left trading (returned to general)"
+
+INVALID ROOM NAME:
+  User: /join my$room
+  Server: "[ERROR] Invalid room name (use alphanumeric, underscore, or hyphen)"
+
+INVALID COMMAND:
+  User: /unknown
+  Server: (No response - command ignored)
+
+================================================================================
+                        ROOM NAME VALIDATION
+================================================================================
+
+ALLOWED:
+  ✓ crypto
+  ✓ my_room
+  ✓ room-123
+  ✓ gaming
+  ✓ GENERAL (converted to lowercase)
+
+REJECTED:
+  ✗ my room (space)
+  ✗ my$room (special char)
+  ✗ my@room (special char)
+  ✗ /room (special char)
+
+PATTERN: ^[a-zA-Z0-9_-]+$
+
+================================================================================
+                        BROADCAST BEHAVIOR
+================================================================================
+
+BEFORE:
+  broadcast(message) → sends to all connected users
+  
+AFTER:
+  broadcast_to_room(message, room_name) → sends to room only
+  
+  Example:
+    User in "crypto" sends: "Hello"
+    → Broadcasted only to clients in "crypto" room
+    → Users in "gaming" don't receive message
+
+================================================================================
+                       THREAD SAFETY
+================================================================================
+
+LOCKS USED:
+
+1. clients_lock:
+   - Protects: clients dict
+   - When: Add/remove users, check duplicates
+
+2. rooms_lock:
+   - Protects: rooms dict
+   - When: Add/remove from rooms, list rooms
+
+3. reset_tokens_lock:
+   - Protects: reset_tokens dict
+   - When: Create/verify/consume tokens
+
+Each critical section properly locked to avoid race conditions.
+
+================================================================================
+                        EDGE CASES HANDLED
+================================================================================
+
+User tries to /leave when in general:
+  → "[SERVER] Already in general"
+
+User tries to /join non-existent room:
+  → Room created automatically
+  → User added to new room
+
+User with invalid room name:
+  → "[ERROR] Invalid room name ..."
+
+User disconnects while in room:
+  → Removed from room automatically
+  → Room deleted if empty (except general)
+
+Multiple users join same room:
+  → All receive each other's messages
+  → Room persists as long as anyone in it
+
+================================================================================
+                        COMPATIBILITY
+================================================================================
+
+BACKWARD COMPATIBLE: ✓ YES
+
+- Authentication unchanged
+- Forgot password unchanged
+- Reset password unchanged
+- Chat logic mostly unchanged
+- Only addition: room system
+
+MIGRATION:
+- No database changes
+- No existing user data affected
+- All users start in "general" on login
+
+================================================================================
+                        TESTING CHECKLIST
+================================================================================
+
+✓ Syntax valid
+✓ Imports valid
+✓ Room creation on /join
+✓ Message isolation per room
+✓ /leave returns to general
+✓ /rooms lists active rooms
+✓ Invalid room names rejected
+✓ Duplicate users in room prevented
+✓ Room deletion when empty
+✓ General room never deleted
+✓ Disconnect cleanup works
+✓ Thread safety (locks)
+✓ Authentication unchanged
+✓ Forgot password unchanged
+✓ Reset password unchanged
+
+================================================================================
+                        FILES AFFECTED
+================================================================================
+
+UPDATED:
+  ✅ server.py (563 lines)
+     - New rooms dict
+     - New room functions
+     - Enhanced client dict
+     - Modified chat loop (room-aware)
+     - Message isolation per room
+
+BACKUP:
+  📦 server_no_rooms.py - Version without rooms
+
+NO CHANGES:
+  ✅ client.py - Works as-is (already has proper auth menu)
+  ✅ Database - No changes needed
+
+================================================================================
+                        DEPLOYMENT
+================================================================================
+
+Replace server.py with new version
+No database migration required
+Backward compatible with existing code
+
+Start server:
+  python3 server.py
+
+Existing clients still work:
+  python3 client.py
+
+All users default to "general" room on login.
+
+================================================================================
+                        FUTURE ENHANCEMENTS (Optional)
+================================================================================
+
+1. Persistent room creation
+   - Save room list to file
+   - Restore on server restart
+
+2. Room permissions
+   - Password-protected rooms
+   - Room operators/moderators
+   - Private rooms
+
+3. Room metadata
+   - Topic/description per room
+   - Creation timestamp
+   - User count display
+
+4. Room notifications
+   - Notify when room created/deleted
+   - User activity per room
+   - Messages per room
+
+5. Message history
+   - Store per-room messages
+   - Retrieve message history
+   - Search across rooms
+
+================================================================================
+                            CONCLUSION
+================================================================================
+
+Room system successfully added to TCP chat. Messages now isolated per room.
+Users can organize conversations into multiple topics/channels.
+
+Core features:
+✓ Default "general" room
+✓ Join/leave/list rooms
+✓ Per-room message isolation
+✓ Automatic room creation/deletion
+✓ Thread-safe implementation
+✓ Full backward compatibility
+
+Ready for production deployment.
+
+================================================================================
