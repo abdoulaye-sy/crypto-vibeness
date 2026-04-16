@@ -256,8 +256,16 @@ def handle_chat_command(client_socket, command, username, current_room):
             client_socket.send(msg.encode('utf-8'))
             return None, current_room
         
-        # Leave current room
+        # Don't rejoin same room
+        if current_room == new_room:
+            msg = f"[SERVER] Already in {new_room}\n"
+            client_socket.send(msg.encode('utf-8'))
+            return None, current_room
+        
+        # Notify old room that user is leaving
         leave_room(client_socket, current_room)
+        leave_msg = f"[SERVER] {username} left {current_room}\n"
+        broadcast_to_room(leave_msg, current_room)
         
         # Join new room
         join_room(client_socket, new_room, username)
@@ -266,11 +274,11 @@ def handle_chat_command(client_socket, command, username, current_room):
         confirm_msg = f"[SERVER] You joined room: {new_room}\n"
         client_socket.send(confirm_msg.encode('utf-8'))
         
-        # Broadcast to new room
+        # Notify new room that user joined
         broadcast_msg = f"[SERVER] {username} joined {new_room}\n"
         broadcast_to_room(broadcast_msg, new_room, sender_socket=client_socket)
         
-        print(f"[ROOM] {username} joined {new_room}")
+        print(f"[ROOM] {username} moved from {current_room} to {new_room}")
         return None, new_room
     
     elif cmd == '/leave':
