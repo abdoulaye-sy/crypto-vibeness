@@ -1,6 +1,6 @@
 """
 Crypto Vibeness - Secure Chat Server
-Stage 1: Base chat with authentication
+Stage 2: Enhanced authentication with password management
 """
 
 import socket
@@ -9,10 +9,17 @@ import json
 import logging
 import signal
 import os
-import hashlib
-import secrets
 from datetime import datetime
 from pathlib import Path
+from password_manager import PasswordManager, PasswordValidator, PasswordRulesEngine
+
+# Color mapping for usernames (must match client.py)
+COLOR_LIST = ["green", "yellow", "blue", "magenta", "cyan"]
+
+def get_username_color(username):
+    """Get color name for username (deterministic based on hash)"""
+    color_idx = hash(username) % len(COLOR_LIST)
+    return COLOR_LIST[color_idx]
 
 # Create logs directory if it doesn't exist
 logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
@@ -39,78 +46,48 @@ HOST = '127.0.0.1'
 PORT = 5001
 
 class AuthManager:
-    """Manages user authentication and account persistence"""
+    """Manages user authentication with password management"""
     
-    def __init__(self, accounts_file='accounts.json'):
-        self.accounts_file = accounts_file
-        self.accounts = {}
+    def __init__(self, credentials_file='this_is_safe.txt', rules_file='password_rules.txt'):
+        self.password_manager = PasswordManager(credentials_file)
+        self.rules_engine = PasswordRulesEngine(rules_file)
+        self.validator = PasswordValidator(self.rules_engine)
         self.lock = threading.Lock()
-        self.load_accounts()
-    
-    def load_accounts(self):
-        """Load accounts from JSON file"""
-        try:
-            if os.path.exists(self.accounts_file):
-                with open(self.accounts_file, 'r') as f:
-                    self.accounts = json.load(f)
-                logger.info(f"Loaded {len(self.accounts)} accounts")
-            else:
-                logger.info("No accounts file found, starting fresh")
-        except Exception as e:
-            logger.error(f"Error loading accounts: {e}")
-            self.accounts = {}
-    
-    def save_accounts(self):
-        """Save accounts to JSON file"""
-        try:
-            with open(self.accounts_file, 'w') as f:
-                json.dump(self.accounts, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving accounts: {e}")
-    
-    def hash_password(self, password):
-        """Hash password with salt using SHA256"""
-        salt = secrets.token_hex(16)
-        hash_obj = hashlib.sha256((salt + password).encode())
-        hashed = hash_obj.hexdigest()
-        return f"{salt}${hashed}"
-    
-    def verify_password(self, password, stored_hash):
-        """Verify password against stored hash"""
-        try:
-            salt, hashed = stored_hash.split('$')
-            hash_obj = hashlib.sha256((salt + password).encode())
-            return hash_obj.hexdigest() == hashed
-        except:
-            return False
     
     def account_exists(self, username):
         """Check if account exists"""
         with self.lock:
-            return username in self.accounts
+            return self.password_manager.account_exists(username)
     
     def create_account(self, username, password):
-        """Create new account"""
+        """Create new account with password validation"""
         with self.lock:
-            if username in self.accounts:
-                return False  # Account already exists
+            # Validate password strength first
+            is_valid, errors = self.validator.validate(password)
+            if not is_valid:
+                return False, errors
             
-            self.accounts[username] = {
-                "password_hash": self.hash_password(password),
-                "created_at": datetime.now().isoformat()
-            }
-            self.save_accounts()
-            logger.info(f"Account created: {username}")
-            return True
+            # Create account
+            created = self.password_manager.create_account(username, password)
+            if created:
+                logger.info(f"Account created: {username}")
+            return created, []
     
     def verify_account(self, username, password):
         """Verify username and password"""
         with self.lock:
-            if username not in self.accounts:
+            if not self.password_manager.account_exists(username):
                 return False
-            
-            stored_hash = self.accounts[username]["password_hash"]
-            return self.verify_password(password, stored_hash)
+            return self.password_manager.verify_account(username, password)
+    
+    def get_password_strength(self, password):
+        """Get password strength indicator"""
+        score, strength, details = self.validator.get_strength(password)
+        return strength, details
+    
+    def get_password_rules(self):
+        """Get list of password rules"""
+        return self.rules_engine.get_rules_summary()
 
 class Room:
     def __init__(self, name, is_private=False, password=None):
@@ -228,7 +205,7 @@ class Server:
             return self.rooms[room_name]
 
     def authenticate_client(self, client):
-        """Authenticate client: login existing account or create new account"""
+        """Authenticate client: login existing account or create new account with validation"""
         logger.info(f"Authentication started for {client.addr}")
         
         while True:
@@ -272,32 +249,49 @@ class Server:
                 if not response or response.strip().lower() != "yes":
                     continue
                 
-                # Get password
-                client.send("PASSWORD:")
-                password = client.receive()
-                if not password:
-                    return None
-                password = password.strip()
-                
-                # Confirm password
-                client.send("CONFIRM_PASSWORD:")
-                confirm = client.receive()
-                if not confirm:
-                    return None
-                confirm = confirm.strip()
-                
-                # Check if passwords match
-                if password != confirm:
-                    client.send("ERROR:Passwords don't match")
-                    continue
+                # Password creation loop with validation
+                password_valid = False
+                while not password_valid:
+                    # Get password
+                    client.send("PASSWORD:")
+                    password = client.receive()
+                    if not password:
+                        return None
+                    password = password.strip()
+                    
+                    # Validate password strength
+                    strength, details = self.auth_manager.get_password_strength(password)
+                    client.send(f"PASSWORD_STRENGTH:{strength}")
+                    
+                    # Check validation
+                    is_valid, errors = self.auth_manager.validator.validate(password)
+                    if not is_valid:
+                        error_msg = "\n".join(errors)
+                        client.send(f"ERROR:Password too weak\n{error_msg}\nRETRY_PASSWORD:")
+                        password_valid = False
+                    else:
+                        # Password is valid, ask for confirmation
+                        client.send("CONFIRM_PASSWORD:")
+                        confirm = client.receive()
+                        if not confirm:
+                            return None
+                        confirm = confirm.strip()
+                        
+                        # Check if passwords match
+                        if password != confirm:
+                            client.send("ERROR:Passwords don't match\nRETRY_PASSWORD:")
+                            password_valid = False
+                        else:
+                            password_valid = True
                 
                 # Create account
-                if self.auth_manager.create_account(username, password):
+                created, errors = self.auth_manager.create_account(username, password)
+                if created:
                     logger.info(f"Account created: {username}")
                     client.send("OK:Account created\nOK:Authenticated")
                     return username
                 else:
-                    client.send("ERROR:Account already exists")
+                    client.send("ERROR:Failed to create account")
                     continue
 
     def handle_client(self, client):
@@ -466,6 +460,7 @@ class Server:
                     msg_data = json.dumps({
                         "type": "message",
                         "username": username,
+                        "color": get_username_color(username),
                         "room": client.room.name,
                         "message": sanitized_message,
                         "timestamp": timestamp

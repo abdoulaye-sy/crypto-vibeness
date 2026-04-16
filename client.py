@@ -48,17 +48,12 @@ class Client:
         return True
 
     def authenticate(self):
-        """Authenticate: login or create account"""
+        """Authenticate: login or create account with password validation"""
         prompt = self.socket.recv(1024).decode('utf-8')
         
         while True:
-            # Check for error messages
-            if "ERROR" in prompt:
-                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0] if 'ERROR:' in prompt else prompt
-                print(f"❌ {error_msg}")
-            
             # AUTH prompt - request username
-            if "AUTH" in prompt:
+            if "AUTH:" in prompt:
                 username = input("Enter username: ").strip()
                 if not username:
                     continue
@@ -70,14 +65,36 @@ class Client:
             elif "CREATE_ACCOUNT?" in prompt:
                 response = input("Create account? (yes/no): ").strip().lower()
                 self.socket.sendall(response.encode('utf-8') + b'\n')
-                
-                if response == "yes":
-                    prompt = self.socket.recv(1024).decode('utf-8')
+                prompt = self.socket.recv(1024).decode('utf-8')
+            
+            # PASSWORD_STRENGTH message (informational)
+            elif "PASSWORD_STRENGTH:" in prompt:
+                strength_msg = prompt.split('PASSWORD_STRENGTH:', 1)[1].split('\n')[0]
+                print(f"💪 {strength_msg}")
+                # Check what follows the strength message
+                if "\n" in prompt:
+                    remaining = prompt.split('\n', 1)[1]
+                    prompt = remaining if remaining else self.socket.recv(1024).decode('utf-8')
                 else:
                     prompt = self.socket.recv(1024).decode('utf-8')
             
+            # Error with validation details and retry prompt
+            elif "ERROR:" in prompt and "RETRY_PASSWORD:" in prompt:
+                # Extract error message
+                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0]
+                print(f"❌ {error_msg}")
+                # Display all validation error lines
+                lines = prompt.split('\n')
+                for line in lines:
+                    if line.startswith('❌'):
+                        print(f"  {line}")
+                # Send new password
+                password = input("Enter password: ").strip()
+                self.socket.sendall(password.encode('utf-8') + b'\n')
+                prompt = self.socket.recv(1024).decode('utf-8')
+            
             # PASSWORD prompt - verify/set password
-            elif "PASSWORD" in prompt:
+            elif "PASSWORD:" in prompt:
                 if "CONFIRM" in prompt:
                     # Confirm password prompt
                     password = input("Confirm password: ").strip()
@@ -88,26 +105,30 @@ class Client:
                 self.socket.sendall(password.encode('utf-8') + b'\n')
                 prompt = self.socket.recv(1024).decode('utf-8')
             
+            # RETRY_PASSWORD - password validation failed
+            elif "RETRY_PASSWORD:" in prompt:
+                password = input("Enter password again: ").strip()
+                self.socket.sendall(password.encode('utf-8') + b'\n')
+                prompt = self.socket.recv(1024).decode('utf-8')
+            
             # OK:Authenticated - success
-            elif "OK" in prompt and "Authenticated" in prompt:
+            elif "OK:" in prompt and "Authenticated" in prompt:
                 color_idx = hash(self.username) % len(COLOR_LIST)
                 self.color = COLOR_LIST[color_idx]
                 print(f"✅ Authenticated as {self.username}")
+                # Check for account creation message
+                if "Account created" in prompt:
+                    print("✅ Account created successfully")
                 return True
             
-            # Bundled message handling
-            elif "ERROR" in prompt and "PASSWORD" in prompt:
-                # ERROR + PASSWORD bundled
-                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0]
+            # Generic error message
+            elif "ERROR:" in prompt:
+                error_msg = prompt.split('ERROR:', 1)[1].split('\n')[0] if 'ERROR:' in prompt else prompt
                 print(f"❌ {error_msg}")
-                # Extract PASSWORD part
-                if "\n" in prompt:
-                    password = input("Enter password: ").strip()
-                    self.socket.sendall(password.encode('utf-8') + b'\n')
-                    prompt = self.socket.recv(1024).decode('utf-8')
+                prompt = self.socket.recv(1024).decode('utf-8')
             
             else:
-                # Unknown prompt, wait for next
+                # Unknown prompt, wait for next message
                 prompt = self.socket.recv(1024).decode('utf-8')
         
         return False
@@ -118,8 +139,23 @@ class Client:
 
     def get_room(self):
         """Get/Create room selection and handling"""
-        while True:
-            prompt = self.socket.recv(1024).decode('utf-8')
+        attempt = 0
+        while attempt < 3:  # Max 3 attempts
+            attempt += 1
+            try:
+                prompt = self.socket.recv(1024).decode('utf-8')
+            except socket.timeout:
+                print(f"❌ Timeout waiting for room selection prompt (attempt {attempt})")
+                continue
+            except Exception as e:
+                print(f"❌ Error receiving room selection prompt: {e}")
+                return False
+            
+            # Check for valid response
+            if not prompt:
+                print(f"❌ Server disconnected during room selection (attempt {attempt})")
+                return False
+            
             if "ROOM" in prompt:
                 room = input("Enter room name (default: general): ").strip() or "general"
                 self.socket.sendall(room.encode('utf-8') + b'\n')
@@ -176,8 +212,10 @@ class Client:
             if msg["type"] == "system":
                 return f"{COLORS['yellow']}{msg['message']}{COLORS['reset']}"
             else:
+                # Apply color only to username, not the entire message
                 color = COLORS[msg.get("color", "white")]
-                return f"{color}{msg['username']}: {msg['message']}{COLORS['reset']}"
+                username_colored = f"{color}{msg['username']}{COLORS['reset']}"
+                return f"{username_colored}: {msg['message']}"
         except:
             return data
 
