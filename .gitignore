@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Credentials and secrets
 this_is_safe.txt
 
@@ -10,10 +11,25 @@ dist/
 build/
 
 # IDE and Editor
+=======
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+*.egg-info/
+
+# IDE
+>>>>>>> crypto-mous
 .vscode/
 .idea/
 *.swp
 *.swo
+<<<<<<< HEAD
 *~
 .DS_Store
 
@@ -28,3 +44,10 @@ logs/*.txt
 # OS
 .DS_Store
 Thumbs.db
+=======
+
+# Project specific
+log_*.txt
+*.log
+this_is_safe.txt
+>>>>>>> crypto-mous
