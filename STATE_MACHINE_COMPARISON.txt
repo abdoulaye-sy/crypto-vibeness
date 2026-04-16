@@ -1,0 +1,238 @@
+================================================================================
+                    STATE MACHINE COMPARISON
+================================================================================
+
+BEFORE (BROKEN):
+================
+
+                         Client connects
+                              |
+                              v
+                       Server: "ENTER_USERNAME"
+                              |
+                    ________________|_________________
+                   |                |                 |
+              LOGIN mode         FORGOT mode      RESET mode
+                   |                |                 |
+         Client: username   Client: /forgot        Client: /reset
+              username         username              token pass
+                   |                |                 |
+                   v                v                 v
+         Server: "ENTER_PASSWORD"  (SAME PROMPT FOR ALL!)
+                   |                |                 |
+         This is RIGHT      This is WRONG!       This is WRONG!
+                   |                |                 |
+            Authenticate   Confusion, error    Confusion, error
+                   |                |                 |
+                 Chat          ❌ BUG ❌         ❌ BUG ❌
+
+
+AFTER (FIXED):
+==============
+
+                         Client connects
+                              |
+                              v
+                       Server: "SELECT_MODE"
+                              |
+                    ________________|_________________
+                   |                |                 |
+              Client: LOGIN   Client: FORGOT    Client: RESET
+                   |                |                 |
+                   v                v                 v
+            ┌─ LOGIN FLOW     ┌─ FORGOT FLOW     ┌─ RESET FLOW
+            |                 |                  |
+            | ENTER_USERNAME  | ENTER_USERNAME   | ENTER_TOKEN
+            | ↓               | ↓                 | ↓
+            | ENTER_PASSWORD  | Generate token   | Verify token
+            | ↓               | ↓                 | ↓
+            | Authenticate    | Send token       | ENTER_PASSWORD
+            | ↓               | ↓                 | ↓
+            | "ACCEPT"        | "[SERVER] Reset" | Update password
+            | ↓               | ↓                 | ↓
+            | Chat            | Disconnect       | Disconnect
+            |                 |                  |
+            └─ ✓ CORRECT      └─ ✓ CORRECT      └─ ✓ CORRECT
+
+================================================================================
+                        KEY DIFFERENCE
+================================================================================
+
+BEFORE: One big state machine (confusing)
+  Problem: Can't distinguish between modes early
+  Result: Always follows LOGIN path
+
+AFTER: Three independent state machines (clear)
+  Solution: Select mode FIRST
+  Result: Each mode has its own path
+
+================================================================================
+                        STATE TRANSITIONS
+================================================================================
+
+LOGIN STATE MACHINE:
+  START
+    |
+    v
+  "ENTER_USERNAME" → [username] → "ENTER_PASSWORD" → [password]
+    |                                                      |
+    ✓ valid                                             Authenticate
+    |                                                      |
+    → "ACCEPT" → Chat loop → "QUIT" → DISCONNECT
+    |
+    ✗ invalid
+    |
+    → Error → DISCONNECT
+
+FORGOT STATE MACHINE:
+  START
+    |
+    v
+  "ENTER_USERNAME" → [username] → Verify exists
+    |                                   |
+    ✓ exists                        ✗ not found
+    |                                   |
+    → Generate token → Send to client → Error message
+    |                                   |
+    → DISCONNECT                       DISCONNECT
+
+RESET STATE MACHINE:
+  START
+    |
+    v
+  "ENTER_TOKEN" → [token] → Verify & not expired
+    |                            |
+    ✓ valid                   ✗ invalid/expired
+    |                            |
+    → "ENTER_PASSWORD" → Error message → DISCONNECT
+    |
+    [password]
+    |
+    Validate strength
+    |
+    ✓ valid              ✗ invalid
+    |                    |
+    → Update DB → Error message
+    |           |
+    Send success DISCONNECT
+    |
+    DISCONNECT
+
+================================================================================
+                        CONTROL FLOW COMPARISON
+================================================================================
+
+BEFORE (lines ~300 in handle_client):
+
+if username.startswith('/'):
+    result = handle_client_command(...)
+    if result:
+        if result.startswith('TOKEN_SENT:'):
+            client_socket.send(...)
+        # ...
+    return  # Sometimes executes...
+                # ...other times doesn't (BUG!)
+
+if is_username_taken(username):
+    # ...
+    return
+
+# ALWAYS reached (even for forgot/reset!)
+client_socket.send("ENTER_PASSWORD\n".encode('utf-8'))
+password = client_socket.recv(1024).decode('utf-8').strip()
+
+
+AFTER (lines ~50 in handle_client):
+
+mode = client_socket.recv(1024).decode('utf-8').strip().upper()
+
+if mode == "LOGIN":
+    username, status = handle_login_flow(...)
+    if username:
+        # Chat loop
+        
+elif mode == "FORGOT":
+    handle_forgot_flow(...)
+    
+elif mode == "RESET":
+    handle_reset_flow(...)
+    
+else:
+    Error message
+
+
+Result: Clear, no spaghetti code, no state bleeding!
+
+================================================================================
+                        SIDE-BY-SIDE EXECUTION
+================================================================================
+
+SCENARIO: User chooses FORGOT PASSWORD
+
+BEFORE (BROKEN):
+  1. Server: "ENTER_USERNAME"
+  2. Client: "/forgot john_doe"
+  3. Server: Detects "/" → calls handle_client_command()
+  4. Server: Generates token
+  5. Server: Returns from if block
+  6. Server: Sends "ENTER_PASSWORD"  ← UNWANTED!
+  7. User: Confused! Not expecting password prompt
+  BUG!
+
+AFTER (FIXED):
+  1. Server: "SELECT_MODE"
+  2. Client: "FORGOT"
+  3. Server: Routes to handle_forgot_flow()
+  4. Server: "ENTER_USERNAME"
+  5. Client: "john_doe"
+  6. Server: Generates token
+  7. Server: Sends "[SERVER] Reset token: XXXXXX"
+  8. Server: Returns from function
+  9. Server: Disconnects client
+  User: Happy! Expected flow!
+  FIXED!
+
+================================================================================
+                          BENEFITS SUMMARY
+================================================================================
+
+Code Quality:
+  ✓ No state bleeding between modes
+  ✓ Each handler ~40-50 lines (readable)
+  ✓ Clear separation of concerns
+  ✓ Easy to test independently
+  ✓ Easy to add new modes
+
+User Experience:
+  ✓ Forgot password works correctly
+  ✓ Reset password works correctly
+  ✓ Login unchanged
+  ✓ No confusing prompts
+  ✓ Clear error messages
+
+Security:
+  ✓ Forgot mode never exposes actual password
+  ✓ Reset mode never confuses with login
+  ✓ Each mode handles its security correctly
+  ✓ No token leakage between modes
+
+Maintainability:
+  ✓ Future modes easy to add (just add handler)
+  ✓ Each handler is a complete unit
+  ✓ State transitions explicit
+  ✓ Bugs easier to isolate
+
+================================================================================
+                            CONCLUSION
+================================================================================
+
+The state machine refactoring transforms a buggy, single-path flow into
+three independent, clean flows with proper mode selection.
+
+✓ Bug fixed
+✓ Code cleaner  
+✓ More secure
+✓ Easier to maintain
+✓ Better UX
+
+================================================================================

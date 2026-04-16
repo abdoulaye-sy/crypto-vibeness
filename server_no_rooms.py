@@ -8,14 +8,8 @@ import random
 import time
 
 # Dictionary to store connected clients
-# Key: client socket, Value: {'address': (ip, port), 'username': username, 'room': room_name}
 clients = {}
 clients_lock = threading.Lock()
-
-# Dictionary to store rooms
-# Key: room_name, Value: [client_socket1, client_socket2, ...]
-rooms = {'general': []}
-rooms_lock = threading.Lock()
 
 # Dictionary to store password reset tokens
 reset_tokens = {}
@@ -29,7 +23,6 @@ MIN_PASSWORD_LENGTH = 8
 BCRYPT_ROUNDS = 12
 TOKEN_EXPIRATION = 600
 TOKEN_LENGTH = 6
-DEFAULT_ROOM = 'general'
 
 
 def hash_password(password):
@@ -183,140 +176,24 @@ def authenticate_user(username, password):
             return 'SAVE_FAIL', None
 
 
-def get_all_rooms():
-    """Get list of all room names"""
-    with rooms_lock:
-        return list(rooms.keys())
-
-
-def join_room(client_socket, room_name, username):
-    """Add client to a room"""
-    with rooms_lock:
-        # Create room if doesn't exist
-        if room_name not in rooms:
-            rooms[room_name] = []
-        
-        # Add client to room
-        if client_socket not in rooms[room_name]:
-            rooms[room_name].append(client_socket)
-    
-    # Update client info
+def broadcast(message, sender_socket=None):
+    """Send message to all connected clients except sender"""
     with clients_lock:
-        if client_socket in clients:
-            clients[client_socket]['room'] = room_name
+        for client_socket in list(clients.keys()):
+            if client_socket != sender_socket:
+                try:
+                    client_socket.send(message.encode('utf-8'))
+                except:
+                    pass
 
 
-def leave_room(client_socket, room_name):
-    """Remove client from a room"""
-    with rooms_lock:
-        if room_name in rooms and client_socket in rooms[room_name]:
-            rooms[room_name].remove(client_socket)
-            
-            # Delete room if empty (except general)
-            if len(rooms[room_name]) == 0 and room_name != DEFAULT_ROOM:
-                del rooms[room_name]
-
-
-def broadcast_to_room(message, room_name, sender_socket=None):
-    """Send message to all clients in a specific room except sender"""
-    with rooms_lock:
-        if room_name not in rooms:
-            return
-        
-        room_clients = list(rooms[room_name])
-    
-    for client_socket in room_clients:
-        if client_socket != sender_socket:
-            try:
-                client_socket.send(message.encode('utf-8'))
-            except:
-                pass
-
-
-def handle_chat_command(client_socket, command, username, current_room):
-    """Handle chat commands (/join, /leave, /rooms)"""
-    parts = command.strip().split(maxsplit=1)
-    
-    if not parts:
-        return None, current_room
-    
-    cmd = parts[0].lower()
-    
-    if cmd == '/join':
-        if len(parts) < 2:
-            msg = "[ERROR] Usage: /join <room>\n"
-            client_socket.send(msg.encode('utf-8'))
-            return None, current_room
-        
-        new_room = parts[1].strip()
-        
-        # Validate room name (alphanumeric + underscore)
-        if not re.match(r'^[a-zA-Z0-9_-]+$', new_room):
-            msg = "[ERROR] Invalid room name (use alphanumeric, underscore, or hyphen)\n"
-            client_socket.send(msg.encode('utf-8'))
-            return None, current_room
-        
-        # Leave current room
-        leave_room(client_socket, current_room)
-        
-        # Join new room
-        join_room(client_socket, new_room, username)
-        
-        # Send confirmation to user
-        confirm_msg = f"[SERVER] You joined room: {new_room}\n"
-        client_socket.send(confirm_msg.encode('utf-8'))
-        
-        # Broadcast to new room
-        broadcast_msg = f"[SERVER] {username} joined {new_room}\n"
-        broadcast_to_room(broadcast_msg, new_room, sender_socket=client_socket)
-        
-        print(f"[ROOM] {username} joined {new_room}")
-        return None, new_room
-    
-    elif cmd == '/leave':
-        # Leave current room and go to general
-        if current_room != DEFAULT_ROOM:
-            leave_room(client_socket, current_room)
-            join_room(client_socket, DEFAULT_ROOM, username)
-            
-            # Notify old room
-            leave_msg = f"[SERVER] {username} left {current_room}\n"
-            broadcast_to_room(leave_msg, current_room)
-            
-            # Notify new room
-            join_msg = f"[SERVER] {username} joined {DEFAULT_ROOM}\n"
-            broadcast_to_room(join_msg, DEFAULT_ROOM, sender_socket=client_socket)
-            
-            confirm_msg = f"[SERVER] You returned to {DEFAULT_ROOM}\n"
-            client_socket.send(confirm_msg.encode('utf-8'))
-            
-            print(f"[ROOM] {username} left {current_room} (returned to {DEFAULT_ROOM})")
-            return None, DEFAULT_ROOM
-        else:
-            msg = f"[SERVER] Already in {DEFAULT_ROOM}\n"
-            client_socket.send(msg.encode('utf-8'))
-            return None, current_room
-    
-    elif cmd == '/rooms':
-        room_list = get_all_rooms()
-        msg = f"[SERVER] Available rooms: {', '.join(sorted(room_list))}\n"
-        client_socket.send(msg.encode('utf-8'))
-        return None, current_room
-    
-    elif cmd == '/help':
-        help_msg = (
-            "[SERVER] Available commands:\n"
-            "  /join <room>     - Join or create a room\n"
-            "  /leave           - Return to general room\n"
-            "  /rooms           - List all rooms\n"
-            "  /help            - Show this help\n"
-            "  quit             - Exit chat\n"
-        )
-        client_socket.send(help_msg.encode('utf-8'))
-        return None, current_room
-    
-    else:
-        return None, current_room
+def is_username_taken(username):
+    """Check if username is already in use (active connection)"""
+    with clients_lock:
+        for client_info in clients.values():
+            if client_info['username'].lower() == username.lower():
+                return True
+    return False
 
 
 def handle_login_flow(client_socket, client_address):
@@ -331,11 +208,9 @@ def handle_login_flow(client_socket, client_address):
             return None, None
         
         # Check duplicate active connection
-        with clients_lock:
-            for client_info in clients.values():
-                if client_info['username'].lower() == username.lower():
-                    client_socket.send("REJECT_TAKEN\n".encode('utf-8'))
-                    return None, None
+        if is_username_taken(username):
+            client_socket.send("REJECT_TAKEN\n".encode('utf-8'))
+            return None, None
         
         # Request password
         client_socket.send("ENTER_PASSWORD\n".encode('utf-8'))
@@ -374,6 +249,7 @@ def handle_login_flow(client_socket, client_address):
 def handle_forgot_flow(client_socket, client_address):
     """Handle FORGOT mode: username only, generate token"""
     try:
+        # Request username
         client_socket.send("ENTER_USERNAME\n".encode('utf-8'))
         username = client_socket.recv(1024).decode('utf-8').strip()
         
@@ -381,11 +257,13 @@ def handle_forgot_flow(client_socket, client_address):
             client_socket.send("REJECT_EMPTY\n".encode('utf-8'))
             return False
         
+        # Check if user exists
         users = load_user_database()
         if username.lower() not in users:
             client_socket.send("[ERROR] User not found\n".encode('utf-8'))
             return False
         
+        # Generate and send token
         token = create_reset_token(users[username.lower()][0])
         msg = f"[SERVER] Reset token: {token} (valid {TOKEN_EXPIRATION // 60} minutes)\n"
         client_socket.send(msg.encode('utf-8'))
@@ -400,6 +278,7 @@ def handle_forgot_flow(client_socket, client_address):
 def handle_reset_flow(client_socket, client_address):
     """Handle RESET mode: token + new password"""
     try:
+        # Request token
         client_socket.send("ENTER_TOKEN\n".encode('utf-8'))
         token = client_socket.recv(1024).decode('utf-8').strip()
         
@@ -407,11 +286,13 @@ def handle_reset_flow(client_socket, client_address):
             client_socket.send("REJECT_EMPTY\n".encode('utf-8'))
             return False
         
+        # Verify token
         username = verify_reset_token(token)
         if not username:
             client_socket.send("[ERROR] Invalid or expired token\n".encode('utf-8'))
             return False
         
+        # Request new password
         client_socket.send("ENTER_PASSWORD\n".encode('utf-8'))
         new_password = client_socket.recv(1024).decode('utf-8').strip()
         
@@ -419,10 +300,12 @@ def handle_reset_flow(client_socket, client_address):
             client_socket.send("REJECT_EMPTY_PASSWORD\n".encode('utf-8'))
             return False
         
+        # Validate password strength
         if not is_valid_password(new_password):
             client_socket.send("[ERROR] Password does not meet requirements\n".encode('utf-8'))
             return False
         
+        # Hash and update password
         new_password_hash = hash_password(new_password)
         if update_user_password(username, new_password_hash):
             consume_reset_token(token)
@@ -442,7 +325,6 @@ def handle_reset_flow(client_socket, client_address):
 def handle_client(client_socket, client_address):
     """Main client handler with mode selection"""
     username = None
-    current_room = None
     
     try:
         # Request mode selection
@@ -453,54 +335,22 @@ def handle_client(client_socket, client_address):
             username, status = handle_login_flow(client_socket, client_address)
             
             if username:
-                # Set default room
-                current_room = DEFAULT_ROOM
-                
                 # Store client info
                 with clients_lock:
-                    clients[client_socket] = {
-                        'address': client_address,
-                        'username': username,
-                        'room': current_room
-                    }
-                
-                # Add to default room
-                join_room(client_socket, current_room, username)
+                    clients[client_socket] = {'address': client_address, 'username': username}
                 
                 # Notify others
-                join_message = f"[SERVER] {username} joined {current_room}.\n"
+                join_message = f"[SERVER] {username} joined the chat.\n"
                 print(f"[CONNECTED] {username} ({client_address[0]}:{client_address[1]})")
-                broadcast_to_room(join_message, current_room, sender_socket=client_socket)
-                
-                # Show welcome message
-                welcome_msg = f"[SERVER] Welcome to {current_room}! Type /help for commands\n"
-                client_socket.send(welcome_msg.encode('utf-8'))
+                broadcast(join_message)
                 
                 # Main chat loop
                 while True:
                     message = client_socket.recv(1024).decode('utf-8')
-                    
                     if not message:
                         break
-                    
-                    message = message.strip()
-                    if not message:
-                        continue
-                    
-                    # Check for commands
-                    if message.startswith('/'):
-                        print(f"[CMD] {message} received from {username}")
-                        cmd_result, new_room = handle_chat_command(
-                            client_socket, message, username, current_room
-                        )
-                        # Update room if command changed it
-                        if new_room is not None:
-                            current_room = new_room
-                            print(f"[ROOM_UPDATE] {username} now in {current_room}")
-                    else:
-                        # Regular message - broadcast to room only
-                        print(f"[{current_room}] {username}: {message}")
-                        broadcast_to_room(f"{username}: {message}\n", current_room)
+                    print(f"[{username}] {message.strip()}")
+                    broadcast(f"[{username}] {message}")
         
         elif mode == "FORGOT":
             handle_forgot_flow(client_socket, client_address)
@@ -515,10 +365,6 @@ def handle_client(client_socket, client_address):
         print(f"[ERROR] {client_address}: {e}")
     
     finally:
-        # Remove from room
-        if current_room:
-            leave_room(client_socket, current_room)
-        
         # Remove client
         with clients_lock:
             if client_socket in clients:
@@ -527,9 +373,9 @@ def handle_client(client_socket, client_address):
         client_socket.close()
         
         # Notify others
-        if username and current_room:
-            leave_message = f"[SERVER] {username} left {current_room}.\n"
-            broadcast_to_room(leave_message, current_room)
+        if username:
+            leave_message = f"[SERVER] {username} left the chat.\n"
+            broadcast(leave_message)
             print(f"[DISCONNECTED] {username} ({client_address[0]}:{client_address[1]})")
 
 
