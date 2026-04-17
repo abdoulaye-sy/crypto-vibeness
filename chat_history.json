@@ -1,0 +1,316 @@
+{
+  "rooms": {
+    "crypto": [
+      {
+        "user": "imam",
+        "message": "hello asy",
+        "timestamp": 1776389661.3645034
+      },
+      {
+        "user": "asy",
+        "message": "imam hello nice",
+        "timestamp": 1776389674.3766696
+      }
+    ],
+    "general": [
+      {
+        "user": "asy",
+        "message": "cc",
+        "timestamp": 1776391980.0225928
+      },
+      {
+        "user": "asy",
+        "message": "cv",
+        "timestamp": 1776391999.6155462
+      },
+      {
+        "user": "imam",
+        "message": "oui cv",
+        "timestamp": 1776392038.4734647
+      },
+      {
+        "user": "testuser9",
+        "message": "hello from user 9",
+        "timestamp": 1776392808.9002378
+      },
+      {
+        "user": "user_a",
+        "message": "Hello from A",
+        "timestamp": 1776392975.120219
+      },
+      {
+        "user": "tester",
+        "message": "Chat test 123",
+        "timestamp": 1776393044.3299873
+      },
+      {
+        "user": "autotest",
+        "message": "EncryptionTest123",
+        "timestamp": 1776393101.0351171
+      },
+      {
+        "user": "room_user",
+        "message": "RoomTest123",
+        "timestamp": 1776393200.6132016
+      },
+      {
+        "user": "dbg_user",
+        "message": "TestMsg",
+        "timestamp": 1776393221.7487435
+      },
+      {
+        "user": "final_test",
+        "message": "EncryptionFixed",
+        "timestamp": 1776393262.9090042
+      },
+      {
+        "user": "imam",
+        "message": "cc",
+        "timestamp": 1776393539.7553267
+      },
+      {
+        "user": "asy",
+        "message": "oui cv",
+        "timestamp": 1776393580.338611
+      },
+      {
+        "user": "testuser1",
+        "message": "Hello World Test",
+        "timestamp": 1776393858.6075659
+      },
+      {
+        "user": "validation_user",
+        "message": "Hello",
+        "timestamp": 1776393912.8831298
+      },
+      {
+        "user": "validation_user",
+        "message": "Hello World",
+        "timestamp": 1776393913.1836388
+      },
+      {
+        "user": "validation_user",
+        "message": "Test123!",
+        "timestamp": 1776393913.4849255
+      },
+      {
+        "user": "validation_user",
+        "message": "Message with spaces",
+        "timestamp": 1776393913.7854218
+      },
+      {
+        "user": "validation_user",
+        "message": "!@#$%^&*()",
+        "timestamp": 1776393914.0862904
+      },
+      {
+        "user": "debug_user",
+        "message": "Message with spaces",
+        "timestamp": 1776393932.8538458
+      },
+      {
+        "user": "final_test",
+        "message": "Hello",
+        "timestamp": 1776394002.3707807
+      },
+      {
+        "user": "final_test",
+        "message": "The quick brown fox",
+        "timestamp": 1776394002.5711517
+      },
+      {
+        "user": "final_test",
+        "message": "Encryption works!",
+        "timestamp": 1776394002.7717133
+      },
+      {
+        "user": "final_test",
+        "message": "123456789",
+        "timestamp": 1776394005.7352688
+      },
+      {
+        "user": "debugtest",
+        "message": "123456789",
+        "timestamp": 1776394024.4044576
+      },
+      {
+        "user": "testfinal",
+        "message": "Hello",
+        "timestamp": 1776394104.661935
+      },
+      {
+        "user": "testfinal",
+        "message": "123456789",
+        "timestamp": 1776394104.862976
+      },
+      {
+        "user": "testfinal",
+        "message": "Special!@#",
+        "timestamp": 1776394105.0635366
+      },
+      {
+        "user": "testfinal",
+        "message": "The quick brown fox jumps",
+        "timestamp": 1776394105.2643561
+      },
+      {
+        "user": "user_163",
+        "message": "Hello World",
+        "timestamp": 1776394165.4068668
+      },
+      {
+        "user": "user_165",
+        "message": "123456789",
+        "timestamp": 1776394167.143616
+      },
+      {
+        "user": "user_167",
+        "message": "!@#$%^&*()",
+        "timestamp": 1776394168.85895
+      },
+      {
+        "user": "user_169",
+        "message": "The quick brown fox",
+        "timestamp": 1776394170.6035466
+      },
+      {
+        "user": "user_170",
+        "message": "Test123!@# abc",
+        "timestamp": 1776394172.317961
+      },
+      {
+        "user": "user_172",
+        "message": "Hello, World! How are you?",
+        "timestamp": 1776394174.0487027
+      },
+      {
+        "user": "user_174",
+        "message": "[]{}()-=+_",
+        "timestamp": 1776394175.789605
+      },
+      {
+        "user": "longtest",
+        "message": "Hello, World! How are you?",
+        "timestamp": 1776394191.617255
+      },
+      {
+        "user": "final",
+        "message": "Hello",
+        "timestamp": 1776394236.1167262
+      },
+      {
+        "user": "final",
+        "message": "123456789",
+        "timestamp": 1776394237.8408358
+      },
+      {
+        "user": "final",
+        "message": "Hello, World! How are you?",
+        "timestamp": 1776394239.5812795
+      },
+      {
+        "user": "final",
+        "message": "Special!@# $%^&*()",
+        "timestamp": 1776394241.2948933
+      },
+      {
+        "user": "tester",
+        "message": "Hello",
+        "timestamp": 1776394292.3271728
+      },
+      {
+        "user": "tester",
+        "message": "123456789",
+        "timestamp": 1776394294.0615594
+      },
+      {
+        "user": "tester",
+        "message": "Hello, World! How are you?",
+        "timestamp": 1776394295.8021266
+      },
+      {
+        "user": "tester",
+        "message": "Special!@# $%^&*()",
+        "timestamp": 1776394297.540919
+      },
+      {
+        "user": "tester",
+        "message": "Message with spaces",
+        "timestamp": 1776394299.2805104
+      },
+      {
+        "user": "user",
+        "message": "Hello",
+        "timestamp": 1776394367.5690238
+      },
+      {
+        "user": "user",
+        "message": "123456789",
+        "timestamp": 1776394369.2785895
+      },
+      {
+        "user": "user",
+        "message": "!@#$%^&*()",
+        "timestamp": 1776394371.004273
+      },
+      {
+        "user": "user",
+        "message": "Hello, World!",
+        "timestamp": 1776394372.7275522
+      },
+      {
+        "user": "user",
+        "message": "The quick brown fox jumps over the lazy dog",
+        "timestamp": 1776394374.4489725
+      },
+      {
+        "user": "user",
+        "message": "Test123!@# abc XYZ",
+        "timestamp": 1776394376.1707723
+      },
+      {
+        "user": "user",
+        "message": "multiple   spaces",
+        "timestamp": 1776394377.9056113
+      },
+      {
+        "user": "user",
+        "message": "[]{}()-=+_|\\:;\"'<>?,./",
+        "timestamp": 1776394379.623655
+      },
+      {
+        "user": "user",
+        "message": "2024-01-15 14:30:45",
+        "timestamp": 1776394381.354753
+      },
+      {
+        "user": "asy",
+        "message": "cc imam",
+        "timestamp": 1776415014.996651
+      }
+    ]
+  },
+  "dm": {
+    "receiver1:sender1": [
+      {
+        "from": "sender1",
+        "message": "This is a secret DM!",
+        "timestamp": 1776393131.0711331
+      }
+    ],
+    "dm_user_a:dm_user_b": [
+      {
+        "from": "dm_user_a",
+        "message": "SecretDM123!",
+        "timestamp": 1776393174.6179464
+      }
+    ],
+    "dm_receiver:dm_sender": [
+      {
+        "from": "dm_sender",
+        "message": "DMTest456",
+        "timestamp": 1776393204.638794
+      }
+    ]
+  }
+}

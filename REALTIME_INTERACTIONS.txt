@@ -1,0 +1,315 @@
+═══════════════════════════════════════════════════════════════════════════════
+REAL-TIME INTERACTIONS SYSTEM - TYPING & READ RECEIPTS
+═══════════════════════════════════════════════════════════════════════════════
+
+OVERVIEW
+────────────────────────────────────────────────────────────────────────────
+A real-time interaction layer that makes the chat feel live and responsive:
+- Typing indicators show when users are composing
+- Read receipts show message delivery and read status
+- Room-scoped notifications (no cross-room leakage)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+1. TYPING INDICATORS
+────────────────────────────────────────────────────────────────────────────
+
+COMMAND: /typing on
+─────────────────────
+Action:   User indicates they are typing
+Broadcast: To everyone in the same room (except sender)
+Format:   "[SERVER] username is typing...\\n"
+
+Example:
+  alice> /typing on
+  bob sees:    [SERVER] alice is typing...
+  charlie sees: [SERVER] alice is typing...
+  (users in other rooms see nothing)
+
+COMMAND: /typing off
+──────────────────────
+Action:   User indicates they finished typing
+Broadcast: To everyone in the same room (except sender)
+Format:   "[SERVER] username stopped typing.\\n"
+
+Example:
+  alice> /typing off
+  bob sees:     [SERVER] alice stopped typing.
+  charlie sees: [SERVER] alice stopped typing.
+
+FLOW:
+  1. User types: /typing on
+  2. Server marks user as typing in current room
+  3. Server broadcasts to room: "[SERVER] alice is typing..."
+  4. Other users see notification
+  5. User types: /typing off
+  6. Server unmarks user from typing
+  7. Server broadcasts: "[SERVER] alice stopped typing."
+
+═══════════════════════════════════════════════════════════════════════════════
+
+2. READ RECEIPTS
+────────────────────────────────────────────────────────────────────────────
+
+MESSAGE STRUCTURE:
+──────────────────
+Each message is assigned a unique ID when created:
+
+Message format:
+  username: message text
+  MSG_ID:12345
+
+Example:
+  alice: hello everyone
+  MSG_ID:1
+  bob: hi alice
+  MSG_ID:2
+
+MESSAGE STATES:
+────────────────
+✓ DELIVERED   - Message sent to room, all users have received it
+✓✓ READ       - User has acknowledged receipt (sent ACK)
+
+DELIVERY TRACKING:
+──────────────────
+When message sent:
+  1. Server assigns message_id
+  2. Server adds to messages dict
+  3. Server marks as "delivered_to: [user1, user2, ...]"
+  4. Message sent to room with MSG_ID
+
+READING:
+────────
+When client receives message:
+  1. Client sees: "username: message\\nMSG_ID:123"
+  2. Client sends: /ack 123
+  3. Server marks message 123 as read by client_user
+
+STATUS DISPLAY (for sender):
+─────────────────────────────
+After sending message:
+  [✓] msg_id:1      (delivered to all)
+  [✓✓] msg_id:1     (read by all)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+3. DATA STRUCTURES
+────────────────────────────────────────────────────────────────────────────
+
+TYPING TRACKING:
+────────────────
+typing_users = {
+  (socket, room): username,
+  (socket2, room): username2,
+}
+
+Purpose: Track who is typing in which room
+
+MESSAGE TRACKING:
+─────────────────
+messages = {
+  message_id: {
+    'sender': 'alice',
+    'room': 'general',
+    'text': 'hello everyone',
+    'delivered_to': ['bob', 'charlie'],
+    'read_by': ['bob'],
+    'timestamp': 1234567890
+  },
+  message_id+1: {...}
+}
+
+Purpose: Track delivery and read status for all messages
+Cleanup: Messages older than 1 hour auto-deleted
+
+═══════════════════════════════════════════════════════════════════════════════
+
+4. HELPER FUNCTIONS
+────────────────────────────────────────────────────────────────────────────
+
+set_typing(socket, room, username, typing)
+  → Marks user as typing or not in a room
+  → typing=True: Add to typing_users
+  → typing=False: Remove from typing_users
+  → Thread-safe with typing_lock
+
+get_typing_users(room)
+  → Returns list of users currently typing in room
+  → Used for display and notifications
+
+create_message_with_id(sender, room, text)
+  → Creates message with unique ID
+  → Adds to messages dict
+  → Returns message_id
+  → Thread-safe with messages_lock
+
+mark_message_delivered(message_id, username)
+  → Marks message as delivered to a user
+  → Adds username to delivered_to list
+  → Called when message sent to room
+
+mark_message_read(message_id, username)
+  → Marks message as read by a user
+  → Adds username to read_by list
+  → Called when /ack received
+
+get_message_status(message_id)
+  → Gets delivery/read status of a message
+  → Returns dict with delivered[], read[], text
+
+cleanup_old_messages()
+  → Removes messages older than 1 hour
+  → Called periodically to prevent memory leak
+
+═══════════════════════════════════════════════════════════════════════════════
+
+5. MESSAGE FLOW - EXAMPLE
+────────────────────────────────────────────────────────────────────────────
+
+SCENARIO: Alice sends message to general room where Bob is listening
+
+1. Alice types: hello bob
+   Server: Creates message_id=1
+   Server: Stores in messages dict with delivered_to=[], read_by=[]
+   Server: Marks as delivered_to=['bob']
+   Server: Broadcasts: "alice: hello bob\\nMSG_ID:1\\n"
+
+2. Bob receives message
+   Bob sees: "alice: hello bob\\nMSG_ID:1"
+   Bob types: /ack 1
+
+3. Server receives /ack
+   Server: Finds message_id=1
+   Server: Marks read_by=['bob']
+   Server: Updates status
+
+Result:
+  [✓] delivered to bob (step 1)
+  [✓✓] read by bob (step 3)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+6. THREAD SAFETY
+────────────────────────────────────────────────────────────────────────────
+
+Three new locks:
+
+typing_lock
+  Protects: typing_users dictionary
+  Used by: set_typing(), get_typing_users()
+
+messages_lock
+  Protects: messages dictionary, message_id_counter
+  Used by: create_message_with_id(), mark_message_delivered(), 
+           mark_message_read(), get_message_status()
+
+Lock ordering (with existing locks):
+  ✓ typing_lock → messages_lock → rooms_lock → clients_lock → reset_tokens_lock
+
+═══════════════════════════════════════════════════════════════════════════════
+
+7. COMMANDS SUMMARY
+────────────────────────────────────────────────────────────────────────────
+
+/typing on
+  Start typing indicator in current room
+  Example: /typing on
+
+/typing off
+  Stop typing indicator in current room
+  Example: /typing off
+
+/ack <message_id>
+  Acknowledge receipt/read of message
+  Example: /ack 12345
+
+═══════════════════════════════════════════════════════════════════════════════
+
+8. EXAMPLE CHAT SESSION
+────────────────────────────────────────────────────────────────────────────
+
+Terminal A (alice in general):
+  alice: /typing on
+  [SERVER receives /typing on]
+  
+Terminal B (bob in general):
+  bob sees: [SERVER] alice is typing...
+  
+Terminal A:
+  alice: hello everyone!
+  [SERVER creates MSG_ID:1, marks delivered_to=[bob]]
+  
+Terminal B:
+  bob sees: alice: hello everyone!
+            MSG_ID:1
+  bob: /ack 1
+  [SERVER marks message 1 as read by bob]
+
+═══════════════════════════════════════════════════════════════════════════════
+
+9. ROOM ISOLATION
+────────────────────────────────────────────────────────────────────────────
+
+IMPORTANT:
+  ✓ Typing indicators only shown in current room
+  ✓ Read receipts only for messages in current room
+  ✓ No notifications cross room boundaries
+  ✓ Users in different rooms don't see activity
+
+Example:
+  alice in general, charlie in crypto
+  
+  alice: /typing on
+  charlie sees: (nothing - different room)
+  
+  alice: hello
+  MSG_ID:1
+  charlie sees: (nothing - different room)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+10. PERFORMANCE & MEMORY
+────────────────────────────────────────────────────────────────────────────
+
+Memory Usage:
+  ✓ Typing users: ~100 bytes per active typer
+  ✓ Messages: ~200 bytes per message (stored 1 hour)
+  ✓ With 50 users, ~1000 active messages = ~200KB
+
+Optimization:
+  ✓ Old messages auto-deleted after 1 hour
+  ✓ Typing state cleared when user leaves room
+  ✓ Typing state cleared on disconnect
+  ✓ Efficient dictionary lookups
+
+═══════════════════════════════════════════════════════════════════════════════
+
+11. CLIENT INTEGRATION (OPTIONAL)
+────────────────────────────────────────────────────────────────────────────
+
+Client.py changes NOT required, but optional enhancements:
+
+If client wants to display typing indicators:
+  1. Parse incoming messages starting with "[SERVER]"
+  2. Look for "is typing..." or "stopped typing."
+  3. Display in UI
+
+If client wants to send read receipts:
+  1. Extract MSG_ID from message: "MSG_ID:12345"
+  2. Send: /ack 12345
+
+═══════════════════════════════════════════════════════════════════════════════
+
+12. PRODUCTION CHECKLIST
+────────────────────────────────────────────────────────────────────────────
+
+✓ Thread-safe operations
+✓ Memory cleanup (1-hour message expiration)
+✓ Room isolation maintained
+✓ No syntax errors
+✓ Backward compatible
+✓ All commands working
+✓ Error handling for edge cases
+✓ Clean code structure
+
+═══════════════════════════════════════════════════════════════════════════════

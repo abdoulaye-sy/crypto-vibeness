@@ -1,0 +1,78 @@
+===============================================
+XOR ENCRYPTION FIX - DECRYPTION INTEGRATION
+===============================================
+
+PROBLEM REPORTED:
+-----------------
+Messages displayed encrypted on receiving client instead of being decrypted before display.
+
+Example:
+  Sender: "hello world"
+  Receiver saw: "k<ig G\x00\x0b" (encrypted gibberish)
+  Should see: "hello world"
+
+ROOT CAUSE:
+-----------
+The client.py decrypt() function existed but was not being called for DM messages in 
+the parse_and_display_message() function. Regular room messages were being decrypted 
+correctly, but private messages were not.
+
+FIX APPLIED TO client.py:
+-------------------------
+
+1. DM RECEIVED MESSAGE DECRYPTION (Lines 152-169)
+   ---------------------------------------------------
+   Before: Text displayed as-is if it started with "[DM from "
+   After:  Extract encrypted message, decrypt it, then display
+   
+   Code pattern:
+   ```
+   if text_content.startswith('[DM from '):
+       dm_parts = text_content.split(']: ', 1)
+       if len(dm_parts) == 2:
+           dm_header = dm_parts[0] + ']: '
+           dm_message = dm_parts[1]
+           dm_message = decrypt(dm_message)  # <-- ADDED THIS
+           decrypted_dm = dm_header + dm_message
+   ```
+
+2. DM SENT CONFIRMATION DECRYPTION (Lines 171-188)
+   -------------------------------------------------
+   Before: Text displayed as-is if it started with "[DM → "
+   After:  Extract encrypted message, decrypt it, then display
+   
+   Same logic as above for "[DM → recipient]: message" format
+
+HOW IT WORKS NOW:
+-----------------
+
+Encryption Flow (Server-side):
+  Message in chat → is_it_a_command? → NO → encrypt() → send to clients
+
+Decryption Flow (Client-side):
+  Receive message → parse_and_display_message() →
+    Is it a DM? → YES → extract message part → decrypt() → display plaintext
+
+WHAT IS ENCRYPTED:
+------------------
+✓ Room chat messages (sender: message)
+✓ DM content ([DM from/→ sender]: message)
+
+WHAT IS NOT ENCRYPTED:
+----------------------
+✓ Commands (/join, /rooms, /msg, /help, etc.)
+✓ System messages ([SERVER] notifications)
+✓ Server control messages
+
+FILES MODIFIED:
+---------------
+- client.py: Added decryption to DM message handling in parse_and_display_message()
+
+TESTING:
+--------
+✅ Room messages: Correctly encrypted and decrypted
+✅ DM messages: Correctly encrypted on server, decrypted on client
+✅ System messages: Not encrypted (as intended)
+✅ Commands: Not encrypted (as intended)
+
+All features remain compatible and working as expected.
