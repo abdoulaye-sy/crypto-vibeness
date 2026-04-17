@@ -255,27 +255,49 @@ SERVER → ALL_IN_ROOM: {"type": "message", "username": "...", "color": "...", "
 
 ## Security Notes
 
-### Current Implementation
-- Passwords hashed with MD5 + base64 (suitable for learning)
-- Constant-time comparison (HMAC-based, resistant to timing attacks)
-- Configurable validation rules
-- No plaintext password storage
+### Cryptographic Implementation
 
-### Limitations
-- MD5 not production-grade (use bcrypt/Argon2 for production)
-- No message encryption (plain TCP, use TLS for production)
-- No authentication between server sessions (login per connection)
-- Simple password-based room access (no ACLs or permissions)
+#### Stage 2: Secure Password Hashing (UPDATED)
 
-### Future Enhancements
-1. Database integration (SQLite, PostgreSQL)
-2. TLS/SSL encryption
-3. Better hashing (bcrypt, Argon2)
-4. Persistent session tokens
-5. Role-based access control (admin, moderator)
-6. Rate limiting & spam prevention
-7. Message history
-8. Async I/O (asyncio) for better concurrency
+**Previous (Insecure - MD5):**
+- Hash Function: MD5 (vulnerable to fast cracking)
+- Encoding: Base64
+- No salt → rainbow tables work
+- No work factor → instant verification
+
+**Current (Secure - bcrypt):**
+- ✅ **Algorithm**: bcrypt (Blowfish-based, NIST recommended)
+- ✅ **Salt**: 96+ bits, randomly generated per password
+- ✅ **Cost Factor**: 12 (adjustable, prevents brute force attacks)
+- ✅ **Constant-time Verification**: Built into bcrypt.checkpw()
+- ✅ **Format**: `username:algo:cost:salt_b64:hash_b64`
+
+**Example credentials file:**
+```
+alice:bcrypt:12:JDJiJDEyJFhSdEl1UUozakIza3RtY1dMazJicE8=:$2b$12$XRtIuQJ3jB3ktmcWLk2bpO6h6iwa1WOBkFt1zttf8sBxAJ29Z2Ldu
+bob:bcrypt:12:JDJiJDEyJDBTNG9tdjZDM2JjazM1eFVTOEFSbi4=:$2b$12$0S4omv6C3bck35xUS8ARn.PA4yLxf7DAVAn5e/S2t20u3zZlaUe7C
+```
+
+**Why bcrypt is better:**
+- Adaptive cost factor makes it slower for attackers (good for security)
+- Salt prevents rainbow table attacks
+- Each password has unique salt
+- Built-in constant-time comparison resists timing attacks
+- Industry standard (used by Django, Ruby on Rails, etc.)
+
+### MD5 Vulnerability Demonstration
+
+A file `md5_decrypted.txt` documents how MD5 is vulnerable:
+- Fast to compute (millions of hashes per second possible)
+- No salt in original implementation
+- No work factor to slow attackers
+- Can be cracked with hashcat in seconds with pattern masking
+
+**Hashcat example:**
+```bash
+# Pattern: ?u?u?l?l?u?u?s (2 uppercase, 2 lowercase, 2 uppercase, 1 special)
+hashcat -m 500 -a 3 '35b95f7c0f63631c453220fb2a86f218' '?u?u?l?l?u?u?s'
+```
 
 ## Development
 
