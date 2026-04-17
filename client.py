@@ -208,7 +208,7 @@ def parse_and_display_message(raw_message, username):
         # Decrypt message (content now preserved)
         message = decrypt(message)
         
-        # Update current room from recent messages if needed
+        # Display formatted message if we have a valid sender
         if sender and sender != "[SERVER]":
             is_own = (sender.lower() == username.lower())
             
@@ -216,18 +216,9 @@ def parse_and_display_message(raw_message, username):
             sys.stdout.write("\r" + " " * 80 + "\r")
             sys.stdout.flush()
             
-            # Display formatted message
+            # Display formatted message (only path for user messages)
             status = message_cache.get(msg_id, {}).get('status') if msg_id else None
             print(format_message_ui(sender, message, msg_id=msg_id, is_own=is_own, status=status))
-        else:
-            sys.stdout.write("\r" + " " * 80 + "\r")
-            sys.stdout.flush()
-            print(text_content)
-    else:
-        # Just display as-is if can't parse
-        sys.stdout.write("\r" + " " * 80 + "\r")
-        sys.stdout.flush()
-        print(format_system_message(text_content))
 
 
 def receive_messages(client_socket, username):

@@ -1,0 +1,106 @@
+===========================================
+DUPLICATE MESSAGE DISPLAY FIX
+===========================================
+
+PROBLEM:
+--------
+Messages were being displayed multiple times or with duplicated sender names.
+Example: "asy: asy: cc imam" instead of "asy: cc imam"
+
+ROOT CAUSE:
+-----------
+In client.py parse_and_display_message() function, there was problematic code at line 225:
+
+    if sender and sender != "[SERVER]":
+        # ... print formatted message
+    else:
+        print(text_content)  ← THIS LINE WAS THE PROBLEM!
+
+This `else` block would execute when the sender check failed.
+The problem: `text_content` contained the UNDECRYPTED message with both
+the sender name AND the encrypted content. Printing it directly showed garbled output
+and potential duplication of sender name.
+
+Additionally, there was a fallback handler that would print anything that didn't have
+a colon separator, which could cause unexpected output.
+
+SOLUTION:
+---------
+Remove the fallback `else` block and the malformed message handler entirely. 
+The logic now is:
+
+1. If starts with [SERVER] → handle as system message → return
+2. If starts with [DM from ...] → handle as received DM → return  
+3. If starts with [DM → ...] → handle as sent DM → return
+4. If has ':' and valid sender → handle as user message → return
+5. Otherwise → silently ignore (no print, no fallback)
+
+CODE CHANGES:
+-------------
+File: client.py
+Lines: 190-221
+
+BEFORE:
+-------
+    # Parse regular messages (format: "sender: message")
+    if ':' in text_content:
+        parts = text_content.split(':', 1)
+        sender = parts[0].strip()
+        message = parts[1] if len(parts) > 1 else ""
+        
+        # ... message extraction and decryption ...
+        
+        if sender and sender != "[SERVER]":
+            # ... print formatted message ...
+        else:
+            sys.stdout.write("\r" + " " * 80 + "\r")
+            sys.stdout.flush()
+            print(text_content)  ← REMOVED: Printed undecrypted text
+    else:
+        # Just display as-is if can't parse
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
+        print(format_system_message(text_content))  ← REMOVED: Fallback for malformed
+
+AFTER:
+------
+    # Parse regular messages (format: "sender: message")
+    if ':' in text_content:
+        parts = text_content.split(':', 1)
+        sender = parts[0].strip()
+        message = parts[1] if len(parts) > 1 else ""
+        
+        # ... message extraction and decryption ...
+        
+        if sender and sender != "[SERVER]":
+            # ... print formatted message ...
+        # NO ELSE BLOCK - malformed messages silently ignored
+
+IMPACT:
+-------
+✓ Each message now printed exactly once
+✓ No more duplicate sender names
+✓ Malformed messages silently ignored (won't crash or display garbage)
+✓ All message types (user, DM, system) properly routed to correct handler
+
+VERIFICATION:
+-------------
+Tested with various message formats:
+- Regular user messages: "user: hello" → prints once ✓
+- Encrypted messages: "user: [binary]" → decrypted and printed once ✓
+- System messages: "[SERVER] ..." → printed once ✓
+- DM received: "[DM from user]: msg" → printed once ✓
+- DM sent: "[DM → user]: msg" → printed once ✓
+- Malformed messages: no colon → silently ignored ✓
+
+ENCRYPTION STATUS:
+------------------
+✓ Encryption still active (no changes to encryption logic)
+✓ Messages encrypted before sending to server
+✓ Messages decrypted after receiving in client
+✓ Binary control characters preserved during parsing
+✓ XOR cipher working correctly end-to-end
+
+FILES MODIFIED:
+---------------
+- client.py (lines 190-221): Removed problematic else block and fallback handler

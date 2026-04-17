@@ -287,6 +287,11 @@
         "user": "asy",
         "message": "cc imam",
         "timestamp": 1776415014.996651
+      },
+      {
+        "user": "debug_user",
+        "message": "test",
+        "timestamp": 1776415702.782891
       }
     ]
   },
