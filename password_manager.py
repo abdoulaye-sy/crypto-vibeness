@@ -1,14 +1,20 @@
 """
 Password Management Module
 Handles password hashing, verification, validation, and strength evaluation
+
+SECURITY: Uses bcrypt with salt (96+ bits) instead of MD5
+Format: username:bcrypt:12:salt_b64:hash_b64
 """
 
-import hashlib
+import bcrypt
 import base64
 import os
 import logging
-from hmac import compare_digest
 from pathlib import Path
+import secrets
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +97,10 @@ class PasswordManager:
         self.load_credentials()
     
     def load_credentials(self):
-        """Load credentials from file in format username:hashed_password"""
+        """
+        Load credentials from file in format: username:algo:cost_factor:salt_b64:hash_b64
+        Example: alice:bcrypt:12:cKBfIZ/L3Dp7w==:$2b$12$...
+        """
         try:
             if os.path.exists(self.credentials_file):
                 with open(self.credentials_file, 'r') as f:
@@ -100,10 +109,16 @@ class PasswordManager:
                         if not line:
                             continue
                         
-                        # Split only on first colon (password might be long)
-                        if ':' in line:
-                            username, hash_b64 = line.split(':', 1)
-                            self.credentials[username.strip()] = hash_b64.strip()
+                        parts = line.split(':')
+                        if len(parts) >= 5:  # username:algo:cost:salt:hash
+                            username = parts[0]
+                            cred_info = {
+                                'algo': parts[1],
+                                'cost': parts[2],
+                                'salt_b64': parts[3],
+                                'hash': parts[4]
+                            }
+                            self.credentials[username] = cred_info
                 
                 logger.info(f"Loaded {len(self.credentials)} credentials")
             else:
@@ -113,38 +128,41 @@ class PasswordManager:
             self.credentials = {}
     
     def save_credentials(self):
-        """Save credentials to file"""
+        """Save credentials to file in format: username:algo:cost:salt_b64:hash"""
         try:
             with open(self.credentials_file, 'w') as f:
-                for username, hash_b64 in sorted(self.credentials.items()):
-                    f.write(f"{username}:{hash_b64}\n")
+                for username, cred_info in sorted(self.credentials.items()):
+                    line = f"{username}:{cred_info['algo']}:{cred_info['cost']}:{cred_info['salt_b64']}:{cred_info['hash']}\n"
+                    f.write(line)
             logger.debug(f"Credentials saved to {self.credentials_file}")
         except Exception as e:
             logger.error(f"Error saving credentials: {e}")
     
     @staticmethod
-    def hash_password(password):
+    def hash_password(password, cost_factor=12):
         """
-        Hash password using MD5 and encode as base64
-        Returns: base64-encoded MD5 hash
+        Hash password using bcrypt with salt
+        - Salt: 96+ bits (bcrypt uses ~128 bits automatically)
+        - Cost factor: 12 (good balance between security and speed)
+        Returns: (salt_b64, hash_digest)
         """
-        # MD5 hash of the password
-        md5_hash = hashlib.md5(password.encode('utf-8')).digest()
-        # Encode to base64
-        hash_b64 = base64.b64encode(md5_hash).decode('utf-8')
-        return hash_b64
+        # bcrypt.gensalt generates a salt with cost factor
+        salt = bcrypt.gensalt(rounds=cost_factor)
+        # Hash the password
+        hash_digest = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+        # Extract salt portion in base64
+        salt_b64 = base64.b64encode(salt).decode('utf-8')
+        return salt_b64, hash_digest, str(cost_factor)
     
     @staticmethod
-    def verify_password_constant_time(password, stored_hash_b64):
+    def verify_password(password, stored_hash, salt_b64):
         """
-        Verify password against stored hash using constant-time comparison
-        Uses HMAC compare_digest to prevent timing attacks
+        Verify password against bcrypt hash
+        Uses constant-time comparison (built into bcrypt)
         """
         try:
-            # Hash the provided password
-            provided_hash = PasswordManager.hash_password(password)
-            # Constant-time comparison prevents timing attacks
-            return compare_digest(provided_hash, stored_hash_b64)
+            # bcrypt.checkpw handles constant-time comparison internally
+            return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
         except Exception as e:
             logger.warning(f"Error verifying password: {e}")
             return False
@@ -154,23 +172,29 @@ class PasswordManager:
         return username in self.credentials
     
     def create_account(self, username, password):
-        """Create new account with hashed password"""
+        """Create new account with bcrypt hashed password and salt"""
         if username in self.credentials:
             return False  # Account already exists
         
-        hash_b64 = self.hash_password(password)
-        self.credentials[username] = hash_b64
+        salt_b64, hash_digest, cost = self.hash_password(password)
+        self.credentials[username] = {
+            'algo': 'bcrypt',
+            'cost': cost,
+            'salt_b64': salt_b64,
+            'hash': hash_digest
+        }
         self.save_credentials()
         logger.info(f"Account created: {username}")
         return True
     
     def verify_account(self, username, password):
-        """Verify username and password"""
+        """Verify username and password using bcrypt"""
         if username not in self.credentials:
             return False
         
-        stored_hash = self.credentials[username]
-        return self.verify_password_constant_time(password, stored_hash)
+        cred_info = self.credentials[username]
+        stored_hash = cred_info['hash']
+        return self.verify_password(password, stored_hash, cred_info['salt_b64'])
 
 
 class PasswordValidator:
@@ -255,6 +279,105 @@ class PasswordValidator:
         entropy_score = min(100, (entropy_bits / 128) * 100)
         
         return entropy_score
+
+
+class KeyManager:
+    """Manages encryption key generation and storage"""
+    
+    def __init__(self, keys_file='user_keys_do_not_steal_plz.txt'):
+        self.keys_file = keys_file
+        self.user_keys = {}
+        self.load_keys()
+    
+    def load_keys(self):
+        """Load encryption keys from file: username:salt_b64:key_b64"""
+        try:
+            if os.path.exists(self.keys_file):
+                with open(self.keys_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        parts = line.split(':')
+                        if len(parts) >= 3:
+                            username = parts[0]
+                            salt_b64 = parts[1]
+                            key_b64 = parts[2]
+                            self.user_keys[username] = {
+                                'salt_b64': salt_b64,
+                                'key_b64': key_b64,
+                                'key': base64.b64decode(key_b64)
+                            }
+                
+                logger.info(f"Loaded {len(self.user_keys)} encryption keys")
+            else:
+                logger.info("No keys file found, starting fresh")
+        except Exception as e:
+            logger.error(f"Error loading keys: {e}")
+            self.user_keys = {}
+    
+    def save_keys(self):
+        """Save encryption keys to file"""
+        try:
+            with open(self.keys_file, 'w') as f:
+                for username, key_info in sorted(self.user_keys.items()):
+                    line = f"{username}:{key_info['salt_b64']}:{key_info['key_b64']}\n"
+                    f.write(line)
+            logger.debug(f"Keys saved to {self.keys_file}")
+        except Exception as e:
+            logger.error(f"Error saving keys: {e}")
+    
+    @staticmethod
+    def generate_key(password_secret, salt=None):
+        """
+        Generate 128-bit encryption key using PBKDF2HMAC
+        password_secret: User-provided secret for key derivation
+        salt: Optional salt (if None, generates new one)
+        Returns: (salt_b64, key_b64, key_bytes)
+        """
+        if salt is None:
+            # Generate 128-bit (16 bytes) salt
+            salt = secrets.token_bytes(16)
+        elif isinstance(salt, str):
+            # Decode from base64 if string
+            salt = base64.b64decode(salt)
+        
+        # PBKDF2 with SHA256: 100,000 iterations
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=16,  # 128 bits
+            salt=salt,
+            iterations=100000,
+            backend=default_backend()
+        )
+        
+        key = kdf.derive(password_secret.encode('utf-8'))
+        
+        salt_b64 = base64.b64encode(salt).decode('utf-8')
+        key_b64 = base64.b64encode(key).decode('utf-8')
+        
+        return salt_b64, key_b64, key
+    
+    def create_user_key(self, username, password_secret):
+        """Create and store encryption key for new user"""
+        salt_b64, key_b64, key = self.generate_key(password_secret)
+        
+        self.user_keys[username] = {
+            'salt_b64': salt_b64,
+            'key_b64': key_b64,
+            'key': key
+        }
+        
+        self.save_keys()
+        logger.info(f"Encryption key created for {username}")
+        return salt_b64, key_b64, key
+    
+    def get_user_key(self, username):
+        """Get user's encryption key"""
+        if username in self.user_keys:
+            return self.user_keys[username]['key']
+        return None
 
 
 def get_password_strength_indicator(password, validator):
