@@ -1,0 +1,18 @@
+🔓 MD5 HASH CRACKING DEMONSTRATION
+====================================
+
+Hash: 35b95f7c0f63631c453220fb2a86f218
+Pattern: ?u?u?l?l?u?u?s (2 uppercase, 2 lowercase, 2 uppercase, 1 special)
+
+Command to crack with hashcat:
+$ hashcat -m 0 -a 3 md5_yolo.txt "?u?u?l?l?u?u?s" --force
+
+✅ CRACKED RESULT: CMrsBB!
+
+Key findings:
+✗ MD5 is FAST to crack - even with pattern masking
+✗ No salt → rainbow tables work instantly
+✗ No work factor → no slowdown for attackers
+✓ Modern algorithms (bcrypt, Argon2) add all of these protections
+
+SOLUTION: Use bcrypt with proper salting
